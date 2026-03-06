@@ -1,24 +1,3 @@
-#!/usr/bin/env python3
-"""
-Full GeckoLib-aware Minecraft Java -> Bedrock converter
-Merged fixes:
- - sanitize filenames and identifiers (lowercase, underscores, dots)
- - write client_entity textures WITHOUT .png (filesystem keeps .png)
- - write render_controllers to reference texture shortnames (e.g. "texture.default")
- - write RP client_entity materials as {"default": "entity_alphatest"}
- - normalize geometry identifiers and animation keys
- - copy assets from JAR with sanitized filenames and smart JSON routing
- - ensure render_controllers use legacy format_version (1.10.0), include uv_anim {}
- - Extracts 'logo.png' from JAR and places it in both BP and RP folders as pack_icon.png,
-   cropping/resizing it to a valid square size (2,4,8,16,32,64,128,256) using Pillow if available.
- - RP client_entity texture paths now include a leading "textures/" prefix.
- - RP client-entity JSONs are placed in RP/entity/ (not RP/entities/)
- - Uses the JAR filename as the pack name and namespace (fallbacks to cwd name)
- - Sound IDs in rp/sounds.json are sanitized to use underscores (specifically '-s' -> '_s' and '-' -> '_')
- - Sound paths in sounds.json do NOT include a leading "sounds/" prefix
- - sounds.json is written to rp/sounds/sound_definitions.json with correct format_version wrapper
- - .ogg filenames on disk are sanitized (hyphens -> underscores) to match sound definition keys
-"""
 import os
 import re
 import json
