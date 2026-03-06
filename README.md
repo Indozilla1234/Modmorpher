@@ -27,3 +27,10 @@ ModMorpher is designed to fit into a standard local development environment.
 3. Execute the pipeline manager via the terminal:
    ```bash
    python pipeline_manager.py
+
+## Ethical Usage Policy
+This toolkit is a bridge for creators, not a vehicle for piracy. 
+* **Respect Creators:** Do not use this tool to port mods without the original author's explicit permission.
+* **Support the Ecosystem:** Unauthorized redistribution of converted assets hurts the modding community and the creators you admire. 
+* **Abuse Policy:** The maintainers of ModMorpher do not condone or support the use of this software for bypassing Marketplace protections or infringing on Intellectual Property.
+   
