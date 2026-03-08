@@ -33,4 +33,60 @@ This toolkit is a bridge for creators, not a vehicle for piracy.
 * **Respect Creators:** Do not use this tool to port mods without the original author's explicit permission.
 * **Support the Ecosystem:** Unauthorized redistribution of converted assets hurts the modding community and the creators you admire. 
 * **Abuse Policy:** The maintainers of ModMorpher do not condone or support the use of this software for bypassing Marketplace protections or infringing on Intellectual Property.
+
+
+
+## Why This License Exists
+
+ModMorpher is designed to make cross‑platform modding fun, safe, and respectful.  
+Because this toolkit touches both **Java Edition** and **Bedrock Edition** ecosystems, the license is intentionally structured to protect creators, communities, and the project itself.
+
+### 🛡️ Protecting Java Creators  
+Java mods are often open‑source, but they are also frequently stolen, reposted, or sold without permission.  
+ModMorpher’s license ensures that:
+
+- Java mod authors retain full control over their work  
+- Mods can only be converted if you **own them or have explicit permission**  
+- Converted content cannot be redistributed without the creator’s approval  
+
+This keeps Java creators safe while still allowing players to enjoy their favorite mods with friends.
+
+### 🧱 Protecting Bedrock Creators  
+The Bedrock ecosystem includes DRM, Marketplace rules, and paid content.  
+To avoid misuse and protect Bedrock creators:
+
+- ModMorpher **does not bypass DRM**  
+- Marketplace content **cannot** be converted  
+- ARR and paid content are **strictly off‑limits**  
+
+This ensures the tool is never used to harm Bedrock creators or violate Microsoft’s policies.
+
+### 🔧 Protecting Mod Loaders and Communities  
+Java loaders like Forge, Fabric, Quilt, and NeoForge rely on clear licensing and community trust.  
+ModMorpher respects their rules by:
+
+- Requiring permission for conversion  
+- Preserving original licenses  
+- Avoiding unauthorized forks or derivative works  
+
+This prevents fragmentation or misuse that could harm the broader modding ecosystem.
+
+### 👥 Protecting Players and Developers  
+Most importantly, the license keeps ModMorpher fun and safe to use:
+
+- You can convert **your own mods**  
+- You can play with friends  
+- You can explore, learn, and contribute  
+- You can fork the project **privately** for personal development  
+- You get a **10‑day grace period** to correct accidental violations  
+
+The goal is to support creativity — not punish it.
+
+### 🚀 Built for Fun, Not Abuse  
+ModMorpher exists to help players enjoy the mods they love, not to enable piracy or harm creators.  
+The license ensures the project stays alive, legal, and respectful of everyone’s work.
+
+If you're a creator, player, or developer, this license is here to protect **you**, your content, and the community.
+
+
    
