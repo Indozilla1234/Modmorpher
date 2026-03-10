@@ -24,10 +24,11 @@ Unfortunatly Modmorpher **ONLY SUPPORTS FORGE MODS THAT USE MCREATOR AND ARE 1.1
 
 ### Execution Steps
 1. Place the compiled Java `.jar` file into the project root directory.
-2. Ensure the Java source or mappings are accessible if custom de-obfuscation is required.
-3. Execute the pipeline manager via the terminal:
+2. Execute the pipeline manager via the terminal:
    ```bash
    python pipeline_manager.py
+3. Zip up the Bedrock_pack folder as a .mcaddon file
+4.  **ENJOY!**
 
 ## Ethical Usage Policy
 This toolkit is a bridge for creators, not a vehicle for piracy. 
