@@ -16,8 +16,12 @@ This toolkit provides a structured workflow for original content creators who wi
 
 ## Developer Workflow
 ModMorpher is designed to fit into a standard local development environment.
-Unfortunatly Modmorpher **ONLY SUPPORTS FORGE MODS THAT USE MCREATOR AND ARE 1.18+(with 1.12-1.17 results may vary)** however NeoForge support is coming soon!
+Unfortunatly Modmorpher **ONLY SUPPORTS FORGE MODS THAT USE MCREATOR**:
 
+- Mods 1.18+(best results)
+- Mods 1.12+(manual works may be needed)
+- Mods 1.3+(**NOT RECOMENDED**)
+  
 ### Prerequisites
 * **Python 3.10+** (System Path)
 * **OpenJDK 21+** (Required for the analysis engine)
