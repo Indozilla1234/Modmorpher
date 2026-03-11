@@ -16,7 +16,7 @@ This toolkit provides a structured workflow for original content creators who wi
 
 ## Supported Mods
 
-ModMorpher only works with mods built using **MCreator** on **Forge or NeoForge**. Other mod loaders (Fabric, Quilt, etc.) are not supported.
+ModMorpher only works with mods built using **MCreator** on **Forge or NeoForge**. Other mod loaders (Fabric, Quilt, etc.) are not supported.(hand-made mods may work with some effort and manual fixes)
 
 | Minecraft Version | Loader | Support Level |
 |---|---|---|
