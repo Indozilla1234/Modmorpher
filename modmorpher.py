@@ -447,14 +447,14 @@ def find_jar_file(search_dir=".") -> Optional[str]:
         if not f.endswith(".jar"):
             continue
         if any(f.lower().endswith(s) for s in SKIP_SUFFIXES):
-            print(f"[jar] Skipping auxiliary JAR: {f}")
+            print(f"Skipping auxiliary JAR file: {f}")
             continue
         candidates.append(os.path.join(search_dir, f))
     if not candidates:
         return None
     if len(candidates) > 1:
-        print(f"[jar] WARNING: Multiple JAR files found: {[os.path.basename(c) for c in candidates]}")
-        print(f"[jar] Using: {os.path.basename(candidates[0])} — move others out of this directory if wrong.")
+        print(f"Warning: Multiple JAR files found: {[os.path.basename(c) for c in candidates]}")
+        print(f"Using: {os.path.basename(candidates[0])}. Move others out of this directory if incorrect.")
     return candidates[0]
 def detect_loader_from_jar(jar_path: str) -> str:
     try:
@@ -698,7 +698,7 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                     continue
                 continue
             except Exception as ex:
-                print(f"[asset copy error] {file} -> {ex}")
+                print(f"Asset copy error: {file} -> {ex}")
 def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") -> dict:
     try:
         bones = []
@@ -788,7 +788,7 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
                 try:
                     root["cubes"].append(element_to_cube(el))
                 except ValueError as e:
-                    print(f"[model-convert] Skipping invalid element: {e}")
+                    print(f"Skipping invalid element: {e}")
                     continue
             if root["cubes"]:
                 bones.append(root)
@@ -1068,119 +1068,8 @@ def convert_layerdefinition_to_geckolib(
             }],
         }
     except Exception as e:
-        print(f"[model-convert] Failed to convert LayerDefinition model '{model_name}': {str(e)}")
+        print(f"Failed to convert LayerDefinition model '{model_name}': {str(e)}")
         return None
-        if pose_m:
-            for idx, grp in enumerate(pose_m.groups()):
-                v = _parse_java_float(grp.strip())
-                if v is not None:
-                    pivot[idx] = v
-        rot_idx = args_content.find('PartPose.offsetAndRotation')
-        if rot_idx != -1:
-            rot_args = _extract_call_args(args_content, rot_idx, 6)
-            if rot_args and len(rot_args) >= 6:
-                for idx in range(3):
-                    v = _parse_java_float(rot_args[idx].strip())
-                    if v is not None:
-                        pivot[idx] = v
-                for idx in range(3, 6):
-                    deg = _eval_rot_expr(rot_args[idx].strip())
-                    if deg is not None:
-                        rotation[idx - 3] = round(deg, 4)
-        cubes: list = []
-        cur_u, cur_v = 0, 0
-        for tex_m2 in re.finditer(r'\.texOffs\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)', args_content):
-            cur_u = int(tex_m2.group(1))
-            cur_v = int(tex_m2.group(2))
-            after = args_content[tex_m2.end():]
-            ab = re.match(
-                r'\s*\.addBox\s*\(\s*([^,)]+)\s*,\s*([^,)]+)\s*,\s*([^,)]+)'
-                r'\s*,\s*([^,)]+)\s*,\s*([^,)]+)\s*,\s*([^,)]+)',
-                after
-            )
-            if ab:
-                try:
-                    vals = [float(ab.group(k).strip().rstrip('Ff')) for k in range(1, 7)]
-                    cubes.append({
-                        "origin": [pivot[0]+vals[0], pivot[1]+vals[1], pivot[2]+vals[2]],
-                        "size":   vals[3:6],
-                        "uv":     [cur_u, cur_v],
-                    })
-                except (ValueError, TypeError):
-                    pass
-        for ab in re.finditer(
-            r'(?<!\w)addBox\s*\(\s*([^,)]+)\s*,\s*([^,)]+)\s*,\s*([^,)]+)'
-            r'\s*,\s*([^,)]+)\s*,\s*([^,)]+)\s*,\s*([^,)]+)',
-            args_content
-        ):
-            try:
-                vals = [float(ab.group(k).strip().rstrip('Ff')) for k in range(1, 7)]
-                candidate = {
-                    "origin": [pivot[0]+vals[0], pivot[1]+vals[1], pivot[2]+vals[2]],
-                    "size":   vals[3:6],
-                    "uv":     [cur_u, cur_v],
-                }
-                if candidate not in cubes:
-                    cubes.append(candidate)
-            except (ValueError, TypeError):
-                pass
-        var_to_bone[var_name] = {
-            'name': bone_name, 'pivot': pivot, 'rotation': rotation, 'cubes': cubes,
-        }
-        var_to_parent_var[var_name] = parent_var
-    def _abs_pivot(var: str, depth: int = 0) -> List[float]:
-        if depth > 8 or var not in var_to_parent_var:
-            return var_to_bone.get(var, {}).get('pivot', [0.0, 0.0, 0.0])
-        pv = var_to_parent_var[var]
-        if pv == root_var:
-            return var_to_bone[var]['pivot']
-        parent_abs = _abs_pivot(pv, depth + 1)
-        child_rel  = var_to_bone[var]['pivot']
-        return [parent_abs[k] + child_rel[k] for k in range(3)]
-    gecko_bones = []
-    for var, bone in var_to_bone.items():
-        if bone['name'] == '__root__':
-            continue
-        abs_piv = _abs_pivot(var)
-        fixed_cubes = []
-        for cube in bone['cubes']:
-            rel = [cube['origin'][k] - bone['pivot'][k] for k in range(3)]
-            fixed_cubes.append({
-                "origin": [round(abs_piv[k] + rel[k], 4) for k in range(3)],
-                "size":   cube['size'],
-                "uv":     cube['uv'],
-            })
-        b: dict = {"name": bone['name'], "pivot": [round(x, 4) for x in abs_piv]}
-        if any(r != 0.0 for r in bone['rotation']):
-            b["rotation"] = [round(r, 4) for r in bone['rotation']]
-        pv2 = var_to_parent_var.get(var)
-        if pv2 and pv2 != root_var and pv2 in var_to_bone:
-            pbn = var_to_bone[pv2]['name']
-            if pbn != '__root__':
-                b["parent"] = pbn
-        if fixed_cubes:
-            b["cubes"] = fixed_cubes
-        gecko_bones.append(b)
-    if not gecko_bones:
-        return None
-    geo_id = (
-        f"geometry.{sanitize_identifier(namespace)}"
-        f".{sanitize_identifier(entity_name or model_name)}"
-    )
-    return {
-        "format_version": "1.12.0",
-        "minecraft:geometry": [{
-            "description": {
-                "identifier":            geo_id,
-                "texture_width":         tex_w,
-                "texture_height":        tex_h,
-                "visible_bounds_width":  2,
-                "visible_bounds_height": 2,
-                "visible_bounds_offset": [0, 1, 0],
-            },
-            "bones": gecko_bones,
-        }],
-    }
 def try_convert_model_from_jar(jar, file_path: str, resource_pack: str) -> bool:
     try:
         with jar.open(file_path) as fh:
@@ -1194,16 +1083,16 @@ def try_convert_model_from_jar(jar, file_path: str, resource_pack: str) -> bool:
         geckolib_data = convert_vanilla_model_to_geckolib(data, model_name)
         validation_issues = validate_geckolib_geometry(geckolib_data, model_name)
         if validation_issues:
-            print(f"[model-convert]   Validation warnings for {model_name}:")
+            print(f"Validation warnings for {model_name}:")
             for warning in validation_issues[:3]:
                 print(f"       {warning}")
     except Exception as e:
-        print(f"[model-convert] Failed to convert {file_path}: {e}")
+        print(f"Failed to convert {file_path}: {e}")
         return False
     out_path = os.path.join(resource_pack, "geometry", f"{model_name}.geo.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     safe_write_json(out_path, geckolib_data)
-    status_msg = f"[model-convert] Converted vanilla model -> GeckoLib: {file_path} -> {out_path}"
+    status_msg = f"Converted vanilla model to GeckoLib: {file_path} to {out_path}"
     if 'validation_issues' in locals() and validation_issues:
         status_msg += f"  ({len(validation_issues)} warnings)"
     print(status_msg)
@@ -1445,7 +1334,7 @@ def convert_modelbase_to_geckolib(
             }],
         }
     except Exception as e:
-        print(f"[model-convert] Failed to convert ModelBase model '{model_name}': {str(e)}")
+        print(f"Failed to convert ModelBase model '{model_name}': {str(e)}")
         return None
 _FLOAT_RE      = r'[-+]?[0-9]*\.?[0-9]+[FfDdLl]?'
 _FLOAT_EXPR_RE = r'[-+]?(?:\(float\)\s*)?[A-Za-z0-9_.*+\-/()\s]+'
@@ -1532,7 +1421,7 @@ def safe_write_json(out_path: str, data: dict) -> None:
         model_name = os.path.splitext(os.path.basename(out_path))[0]
         warnings = validate_geckolib_geometry(data, model_name)
         if warnings:
-            print(f"[model-convert]   Validation warnings for {out_path}:")
+            print(f"Validation warnings for {out_path}:")
             for warning in warnings[:5]:
                 print(f"       {warning}")
             if len(warnings) > 5:
@@ -1620,7 +1509,7 @@ def scan_and_convert_layerdefinition_models(
             geo_id = geo_data['minecraft:geometry'][0]['description']['identifier']
             result[cls_name] = geo_id
             converted += 1
-            status_msg = f"[{method_used}] Converted {cls_name} -> {model_stem}.geo.json  ({geo_id})"
+            status_msg = f"[{method_used}] Converted {cls_name} to {model_stem}.geo.json ({geo_id})"
             if conversion_warnings:
                 status_msg += f"  ({len(conversion_warnings)} warnings)"
             print(status_msg)
@@ -1628,7 +1517,7 @@ def scan_and_convert_layerdefinition_models(
                 for warning in conversion_warnings[:3]:
                     print(f"       {warning}")
         except Exception as e:
-            print(f"[model-convert] Failed to write {out_path}: {e}")
+            print(f"Failed to write {out_path}: {e}")
     if converted:
         print(f"[model-convert] Converted {converted} Java model class(es) to GeckoLib geometry")
     return result
@@ -1675,7 +1564,7 @@ def normalise_all_geometry_to_geckolib(resource_pack: str, namespace: str) -> in
                         safe_write_json(dest, data)
                         seen_stems.add(stem)
                         written += 1
-                        print(f"[geo-sweep] GeckoLib → rp/geometry/{dest_name}")
+                        print(f"GeckoLib to rp/geometry/{dest_name}")
                     else:
                         seen_stems.add(stem)
                     continue
@@ -1698,12 +1587,12 @@ def normalise_all_geometry_to_geckolib(resource_pack: str, namespace: str) -> in
                         safe_write_json(dest, converted)
                         seen_stems.add(stem)
                         written += 1
-                        print(f"[geo-sweep] Vanilla→GeckoLib → rp/geometry/{dest_name}")
+                        print(f"Vanilla to GeckoLib to rp/geometry/{dest_name}")
                     except Exception as e:
                         print(f"[geo-sweep] Conversion failed for {src}: {e}")
                     continue
     if written:
-        print(f"[geo-sweep] Normalised {written} model file(s) to rp/geometry/")
+        print(f"Normalized {written} model file(s) to rp/geometry/")
     return written
 def copy_geckolib_animations_from_jar(jar_path: str, resource_pack: str):
     with zipfile.ZipFile(jar_path, 'r') as jar:
@@ -2738,7 +2627,7 @@ def resolve_custom_goal(custom_class: str, visited: Optional[Set[str]] = None) -
     visited.add(custom_class)
     if custom_class in GOAL_NAME_ALIASES:
         resolved = GOAL_NAME_ALIASES[custom_class]
-        print(f"[goal-resolve] {custom_class} -> {resolved} (alias)")
+        print(f"{custom_class} -> {resolved} (alias)")
         return resolved
     if custom_class in VANILLA_GOALS:
         return custom_class
@@ -2746,9 +2635,9 @@ def resolve_custom_goal(custom_class: str, visited: Optional[Set[str]] = None) -
     if not parent:
         return None
     if parent in VANILLA_GOALS:
-        print(f"[goal-resolve] {custom_class} -> {parent} (vanilla)")
+        print(f"{custom_class} -> {parent} (vanilla)")
         return parent
-    print(f"[goal-resolve] {custom_class} -> {parent} (custom, descending...)")
+    print(f"{custom_class} -> {parent} (custom, descending...)")
     return resolve_custom_goal(parent, visited)
 def _collect_super_goals(entity_class: str,
                          java_files: Dict[str, str],
@@ -2864,10 +2753,10 @@ def extract_ai_goals_from_java(java_code: str,
             resolved = resolve_custom_goal(custom_cls)
             if resolved:
                 if resolved not in ai_goals:
-                    print(f"[goal-resolve] Custom goal '{custom_cls}' resolved -> '{resolved}'")
+                    print(f"Custom goal '{custom_cls}' resolved to '{resolved}'")
                 _add(resolved)
             else:
-                print(f"[goal-resolve] Custom goal '{custom_cls}' could not be resolved to a vanilla goal")
+                print(f"Custom goal '{custom_cls}' could not be resolved to a vanilla goal")
         calls_super_register = any(
             inv.member == 'registerGoals'
             for _, inv in ast._tree.filter(javalang.tree.MethodInvocation)
@@ -2884,7 +2773,7 @@ def extract_ai_goals_from_java(java_code: str,
                 for g in inherited:
                     _add(g)
                 if inherited:
-                    print(f"[goal-resolve] Inherited {len(inherited)} goal(s) via "
+                    print(f"Inherited {len(inherited)} goal(s) via "
                           f"super.registerGoals() for {entity_cls}: {inherited}")
     else:
         for goal_name in VANILLA_GOALS:
@@ -2919,10 +2808,10 @@ def extract_ai_goals_from_java(java_code: str,
             resolved = resolve_custom_goal(custom_cls)
             if resolved:
                 if resolved not in ai_goals:
-                    print(f"[goal-resolve] Custom goal '{custom_cls}' resolved -> '{resolved}'")
+                    print(f"Custom goal '{custom_cls}' resolved to '{resolved}'")
                 _add(resolved)
             else:
-                print(f"[goal-resolve] Custom goal '{custom_cls}' could not be resolved to a vanilla goal")
+                print(f"Custom goal '{custom_cls}' could not be resolved to a vanilla goal")
         if re.search(r'\bsuper\s*\.\s*registerGoals\s*\(\s*\)', java_code):
             cls_m = re.search(r'\bclass\s+([A-Za-z0-9_]+)', java_code)
             if cls_m:
@@ -2931,7 +2820,7 @@ def extract_ai_goals_from_java(java_code: str,
                 for g in inherited:
                     _add(g)
                 if inherited:
-                    print(f"[goal-resolve] Inherited {len(inherited)} goal(s) via "
+                    print(f"Inherited {len(inherited)} goal(s) via "
                           f"super.registerGoals() for {entity_cls}: {inherited}")
     LEGACY_EXTEND_MAP = {
         "MeleeAttackGoal", "RangedAttackGoal",
@@ -3047,14 +2936,14 @@ def detect_despawn_ticks(java_code: str) -> Optional[int]:
             pass
     return None
 def write_render_controller(entity_basename: str, namespace: str, geometry_identifier: str, uv_anim: Optional[Dict] = None) -> str:
-    eb = sanitize_identifier(entity_basename)
-    ns = sanitize_identifier(namespace)
+    entity_basename_clean = sanitize_identifier(entity_basename)
+    namespace_clean = sanitize_identifier(namespace)
     if geometry_identifier.startswith("geometry."):
         geom_tail = geometry_identifier.split(".", 1)[1]
         geom_ident = "geometry." + sanitize_identifier(geom_tail)
     else:
         geom_ident = "geometry." + sanitize_identifier(geometry_identifier)
-    controller_id = f"controller.render.{ns}.{eb}"
+    controller_id = f"controller.render.{namespace_clean}.{entity_basename_clean}"
     controller = {
         "format_version": RP_LEGACY_RENDER_FORMAT,
         "render_controllers": {
@@ -3070,13 +2959,13 @@ def write_render_controller(entity_basename: str, namespace: str, geometry_ident
     }
     if uv_anim:
         controller["render_controllers"][controller_id]["uv_anim"] = uv_anim
-    out_path = os.path.join(RP_FOLDER, "render_controllers", f"{eb}.render_controllers.json")
+    out_path = os.path.join(RP_FOLDER, "render_controllers", f"{entity_basename_clean}.render_controllers.json")
     safe_write_json(out_path, controller)
     print(f"Wrote render controller: {out_path}")
     return controller_id
 def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str, geometry_identifier: str, animation_key: Optional[str], controller_id: str):
-    eb = sanitize_identifier(entity_basename)
-    ns = sanitize_identifier(namespace)
+    entity_basename_clean = sanitize_identifier(entity_basename)
+    namespace_clean = sanitize_identifier(namespace)
     texture_path = texture_ref_to_rp_path(texture_ref, default_kind="entity")
     if not texture_path.startswith("textures/"):
         texture_path_with_prefix = f"textures/{texture_path}"
@@ -3088,7 +2977,7 @@ def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str,
     else:
         geom_ident = "geometry." + sanitize_identifier(geometry_identifier)
     description = {
-        "identifier": f"{ns}:{eb}",
+        "identifier": f"{namespace_clean}:{entity_basename_clean}",
         "textures": {"default": texture_path_with_prefix},
         "geometry": {"default": geom_ident},
         "render_controllers": [controller_id],
@@ -3098,7 +2987,7 @@ def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str,
         "format_version": BP_RP_FORMAT_VERSION,
         "minecraft:client_entity": {"description": description}
     }
-    out_path = os.path.join(RP_FOLDER, "entity", f"{eb}.entity.json")
+    out_path = os.path.join(RP_FOLDER, "entity", f"{entity_basename_clean}.entity.json")
     safe_write_json(out_path, client_entity)
     print(f"[rp_entity] Wrote {out_path}")
 def extract_block_properties_from_java(java_code: str):
