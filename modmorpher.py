@@ -6,6 +6,7 @@ import zipfile
 import shutil
 import builtins
 import time
+import sys
 import math
 import subprocess
 from typing import Optional, Tuple, Dict, Set, List
@@ -16,12 +17,12 @@ except ImportError:
     TQDM_AVAILABLE = False
     _tqdm = None
 class _ProgressLogger:
-    _WARN_PATTERNS = (
+    _scary = (
         "", "warn", "Warn", "WARN", "[WARN]",
         "missing", "Missing", "placeholder", "fallback",
         "skipped", "Skipped",
     )
-    _ERROR_PATTERNS = (
+    _bad_words = (
         "", "error", "Error", "ERROR",
         "failed", "Failed", "exception", "Exception",
         "crash", "Crash",
@@ -115,15 +116,12 @@ try:
     from PIL import Image
     PIL_AVAILABLE = True
 except Exception:
-    PIL_AVAILABLE = False
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow"])
+    PIL_AVAILABLE = True
 try:
     import javalang
 except ImportError:
-    raise ImportError(
-        "This script requires the 'javalang' package.\n"
-        "Install it with:\n"
-        "    pip install javalang"
-    )
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "javalang"])
 JAVALANG_AVAILABLE = True
 class JavaAST:
     def __init__(self, source: str):
