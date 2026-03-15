@@ -1,3 +1,5 @@
+Tool_Version = 1.2.4.3
+
 import os
 import re
 import json
