@@ -1,102 +1,75 @@
-# ModMorpher: Developer Migration Toolkit (Java to Bedrock)
+# ModMorpher - Java → Bedrock migration thing
 
-**ModMorpher** is a high-performance pipeline designed for Java Edition developers to automate the migration of entity logic, models, and GeckoLib animations to the Minecraft Bedrock Edition (Add-on) schema.
+⚠️ Heads up: this script will auto-install Python packages (`javalang`, `Pillow`, etc) the first time you run it. It’s annoying, but it’s required.
 
----
-
-## Technical Overview
-This toolkit provides a structured workflow for original content creators who wish to maintain cross-platform parity for their mods. It eliminates the manual labor involved in rewriting entity behaviors and re-animating models from scratch.
-
-### Core Capabilities
-* **Bytecode Analysis:** Utilizes an integrated Java engine to analyze compiled `.jar` structures and map class hierarchies to Bedrock component-based data.
-* **Animation Morphing:** Automatically translates Java-side animation triggers and vertex data into Bedrock `.animation.json` and state machine files.
-* **Logic Mapping:** Provides a translation layer for NBT-based logic into Bedrock JSON-driven behavior schemas.
+ModMorpher tries to take a Minecraft Java mod and spit out a Bedrock add-on (`.mcaddon`). It’s not perfect, sometimes it borks things, but it usually gets you close enough to tweak manually.
 
 ---
 
-## Supported Mods
+## what it does (sorta)
+- reads Java class/source/jar stuff and makes a best guess at Bedrock / component equivalents
+- converts GeckoLib animation ids into Bedrock `.animation.json` + controller stubs
+- extracts textures/models/sounds from the jar into a Bedrock pack
+- tries to “translate” common NBT/logic patterns, but it’s not magic
 
-ModMorpher only works with mods built using **MCreator** on **Forge or NeoForge**. Other mod loaders (Fabric, Quilt, etc.) are not supported.(hand-made mods may work with some effort and manual fixes)
+---
 
-| Minecraft Version | Loader | Support Level |
+## what works best
+This is made for **MCreator mods built with Forge / NeoForge**.
+
+| Minecraft | loader | how reliable it is |
 |---|---|---|
-| 1.20.1+ | NeoForge |  Decent at best, may need manual fixes|
-| 1.18+ | Forge |  Best |
-| 1.12+ | Forge |  **WILL** need manual fixes |
-| 1.3+ | Forge |  Not recommended |
-| Any Version | Fabric/Quilt |  **NOT SUPPORTED**
-  
-### Prerequisites
-* **Python 3.10+** (System Path)
-* **OpenJDK 21+** (Required for the analysis engine)
+| 1.20.1+ | NeoForge | decent, but expect some manual fixing |
+| 1.18+ | Forge | best chance |
+| 1.12+ | Forge | will probably need manual fixes |
+| 1.3+ | Forge | not really worth it |
+| any | Fabric / Quilt | nope (not supported)
 
-### Execution Steps
-1. Place the compiled Java `.jar` file into the project root directory.
-2. Execute the pipeline manager via the terminal:
+> Hand-made mods can sometimes work, but you’ll often end up having to fix things by hand.
+
+---
+
+## requirements
+- Python 3.10+ on your PATH
+- OpenJDK 21+ (needed for the decompiler)
+
+---
+
+## quick run
+1. Put your compiled `.jar` in this folder (project root).
+2. Run:
    ```bash
    python modmorpher.py
-3. Zip up the Bedrock_pack folder as a .mcaddon file
-4.  **ENJOY!**
+   ```
+3. When it's done, you should have `Bedrock_Pack.mcaddon` in this folder.
 
-## Ethical Usage Policy
-This toolkit is a bridge for creators, not a vehicle for piracy. 
-* **Respect Creators:** Do not use this tool to port mods without the original author's explicit permission.
-* **Support the Ecosystem:** Unauthorized redistribution of converted assets hurts the modding community and the creators you admire. 
-* **Abuse Policy:** The maintainers of ModMorpher do not condone or support the use of this software for bypassing Marketplace protections or infringing on Intellectual Property.
+There will also be a `Bedrock_Pack/` folder with the raw pack structure if you want to poke around.
 
+---
 
+## keep in mind
+- It installs deps automatically. If it crashes the first time, try running it again.
+- It won’t convert everything. Complex AI, special animations, and weird NBT stuff usually need manual fixing.
+- Treat the output as a starting point, not a finished pack.
+- If it “fails silently”, check the terminal output — it usually gives a clue.
 
-## Why This License Exists
+---
 
-ModMorpher is designed to make cross‑platform modding fun, safe, and respectful.  
-Because this toolkit touches both **Java Edition** and **Bedrock Edition** ecosystems, the license is intentionally structured to protect creators, communities, and the project itself.
+## please don’t
+- use this to rip/redistribute paid or Marketplace content
+- convert mods you don’t own or don’t have permission to convert
+- expect it to bypass DRM (it doesn’t)
 
-###  Protecting Java Creators  
-Java mods are often open‑source, but they are also frequently stolen, reposted, or sold without permission.  
-ModMorpher’s license ensures that:
+---
 
-- Java mod authors retain full control over their work  
-- Mods can only be converted if you **own them or have explicit permission**  
-- Converted content cannot be redistributed without the creator’s approval  
+## why the license stuff is here
+This project is meant to help mod creators & players, not to wreck people’s work.
+If you’re converting someone else’s mod, make sure you have permission.
+If it’s Marketplace/paid content, don’t.
 
-This keeps Java creators safe while still allowing players to enjoy their favorite mods with friends.
+---
 
-###  Protecting Bedrock Creators  
-The Bedrock ecosystem includes DRM, Marketplace rules, and paid content.  
-To avoid misuse and protect Bedrock creators:
-
-- ModMorpher **does not bypass DRM**  
-- Marketplace content **cannot** be converted  
-- ARR and paid content are **strictly off‑limits**  
-
-This ensures the tool is never used to harm Bedrock creators or violate Microsoft’s policies.
-
-###  Protecting Mod Loaders and Communities  
-Java loaders like Forge, Fabric, Quilt, and NeoForge rely on clear licensing and community trust.  
-ModMorpher respects their rules by:
-
-- Requiring permission for conversion  
-- Preserving original licenses  
-- Avoiding unauthorized forks or derivative works  
-
-This prevents fragmentation or misuse that could harm the broader modding ecosystem.
-
-###  Protecting Players and Developers  
-Most importantly, the license keeps ModMorpher fun and safe to use:
-
-- You can convert **your own mods**  
-- You can play with friends  
-- You can explore, learn, and contribute  
-- You can fork the project **privately** for personal development  
-- You get a **10‑day grace period** to correct accidental violations  
-
-The goal is to support creativity — not punish it.
-
-###  Built for Fun, Not Abuse  
-ModMorpher exists to help players enjoy the mods they love, not to enable piracy or harm creators.  
-The license ensures the project stays alive, legal, and respectful of everyone’s work.
-
-If you're a creator, player, or developer, this license is here to protect **you**, your content, and the community.
+That’s it. It’s a messy tool that tries to do a lot. If it breaks, blame Minecraft modding and maybe the spacetime continuum. ;)
 
 
    
