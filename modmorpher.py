@@ -1874,14 +1874,17 @@ class GlobalCapabilityRegistry:
                 fh.write(import_line)
 
 def log_critical_failure(message: str):
-    porting_notes_path = os.path.join(OUTPUT_DIR, "PORTING_NOTES.txt")
+    porting_notes_path = "PORTING_NOTES.txt"
     with open(porting_notes_path, "a", encoding="utf-8") as f:
         f.write(f"CRITICAL FAILURE: {message}\n")
 
 OUTPUT_DIR = "Bedrock_Pack"
 BP_FOLDER = os.path.join(OUTPUT_DIR, "bp")
 RP_FOLDER = os.path.join(OUTPUT_DIR, "rp")
-BP_RP_FORMAT_VERSION = "1.21.0"
+BP_RP_FORMAT_VERSION       = "1.26.20"   # BP entity / block
+BP_ITEM_FORMAT_VERSION     = "1.26.20"   # BP item   (FORMATVER140 / ITEMTYPE120)
+BP_RECIPE_FORMAT_VERSION   = "1.26.20"   # BP recipe (FORMATVER160)
+RP_ENTITY_FORMAT_VERSION   = "1.26.20"   # RP client entity (FORMATVER300)
 RP_LEGACY_RENDER_FORMAT = "1.10.0"
 RP_LEGACY_ANIM_FORMAT = "1.10.0"
 VALID_ICON_SIZES = [2, 4, 8, 16, 32, 64, 128, 256]
@@ -1960,7 +1963,7 @@ def create_manifest(pack_name: str, pack_type: str, has_scripting: bool = False)
             "description": f"{pack_name} converted pack",
             "uuid": str(uuid.uuid4()),
             "version": "1.0.0",
-            "min_engine_version": "1.21.0"
+            "min_engine_version": "1.21.50"
         },
         "modules": [
             {
@@ -1978,7 +1981,10 @@ def create_manifest(pack_name: str, pack_type: str, has_scripting: bool = False)
             "version": "1.0.0",
             "entry": "scripts/main.js"
         })
-        manifest["capabilities"] = ["script"]
+        # Note: do NOT add a "capabilities" array here.
+        # In Bedrock, scripting is declared by having a module with type "script";
+        # the "capabilities" field is for things like "editorExtension", and
+        # including "script" there is invalid (CHKMANIF117).
     return manifest
 def write_manifest_for(folder: str, pack_name: str, pack_type: str):
     path = os.path.join(folder, "manifest.json")
@@ -2159,15 +2165,40 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                     if after:
                         first = after[0].lower()
                         category = _normalize_texture_subfolder(first)
-                        if len(after) > 1:
+                        # Only treat `first` as a real subfolder if it's a known
+                        # texture category name (entity, items, blocks …).  If the
+                        # JAR has an entry like "screenshot.png/actual_file.png",
+                        # `first` will contain a ".png" extension — that's a sign
+                        # the segment is a filename masquerading as a directory and
+                        # we should flatten the whole thing to textures/.
+                        first_is_category = (
+                            category != first          # _normalize changed it → known alias
+                            or first in (              # explicit known pass-through names
+                                "entity", "entities", "mob", "mobs",
+                                "item", "items", "block", "blocks",
+                                "mob_effect", "particle", "environment",
+                                "colormap", "misc", "ui", "map", "gui",
+                                "painting", "armor", "font", "effect",
+                                "screens", "screen",
+                            )
+                        ) and "." not in first        # a real folder never has an extension
+                        if first_is_category and len(after) > 1:
                             dest_dir = os.path.join(resource_pack, "textures", category, *[sanitize_identifier(p) for p in after[1:-1]])
                             os.makedirs(dest_dir, exist_ok=True)
                             dest_name = sanitize_filename_keep_ext(after[-1])
                             dest = os.path.join(dest_dir, dest_name)
-                        else:
+                        elif first_is_category:
+                            # Single segment that is a known category name — use as subfolder
                             dest_dir = os.path.join(resource_pack, "textures", category)
                             os.makedirs(dest_dir, exist_ok=True)
                             dest_name = sanitize_filename_keep_ext(after[0])
+                            dest = os.path.join(dest_dir, dest_name)
+                        else:
+                            # `first` is not a real category (e.g. "screenshot_2024.png") —
+                            # flatten: just use the last path component as the filename.
+                            dest_dir = os.path.join(resource_pack, "textures")
+                            os.makedirs(dest_dir, exist_ok=True)
+                            dest_name = sanitize_filename_keep_ext(after[-1])
                             dest = os.path.join(dest_dir, dest_name)
                     else:
                         dest = os.path.join(resource_pack, "textures", sanitize_filename_keep_ext(os.path.basename(file)))
@@ -4768,7 +4799,7 @@ def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str,
         if anim_fx:
             description["sound_effects"] = anim_fx
     client_entity = {
-        "format_version": BP_RP_FORMAT_VERSION,
+        "format_version": RP_ENTITY_FORMAT_VERSION,
         "minecraft:client_entity": {"description": description}
     }
     out_path = os.path.join(RP_FOLDER, "entity", f"{entity_basename_clean}.entity.json")
@@ -4977,7 +5008,7 @@ def convert_java_item_to_bedrock(java_path: str, namespace: str):
     item_id = f"{sanitize_identifier(namespace)}:{sanitize_identifier(item_basename)}"
     props = extract_item_properties_from_java(java_code)
     bp_item = {
-        "format_version": BP_RP_FORMAT_VERSION,
+        "format_version": BP_ITEM_FORMAT_VERSION,
         "minecraft:item": {
             "description": {"identifier": item_id, "register_to_creative_menu": True},
             "components": {}
@@ -4996,7 +5027,7 @@ def convert_java_item_to_bedrock(java_path: str, namespace: str):
     print(f"Converted item (BP) {java_path} -> {out_bp}")
     texture_ref = resolve_texture_reference(namespace, props.get("texture_hint"), "items", fallback_name=sanitize_identifier(item_basename))
     rp_item = {
-        "format_version": BP_RP_FORMAT_VERSION,
+        "format_version": BP_ITEM_FORMAT_VERSION,
         "minecraft:item": {
             "description": {"identifier": item_id, "category": props.get("creative_tab") or "misc"},
             "components": {"minecraft:icon": texture_ref}
@@ -6953,7 +6984,7 @@ JAVA_TAG_TO_BEDROCK_GROUP = {
 def extract_item_tags_from_jar(jar_path: str, namespace: str):
     out_dir = os.path.join(BP_FOLDER, "item_catalog")
     os.makedirs(out_dir, exist_ok=True)
-    catalog = {"format_version": "1.21.0", "minecraft:item_catalog": {"description": {"identifier": f"{namespace}:catalog"}, "groups": []}}
+    catalog = {"format_version": BP_ITEM_FORMAT_VERSION, "minecraft:item_catalog": {"description": {"identifier": f"{namespace}:catalog"}, "groups": []}}
     groups: Dict[str, list] = {}
     with zipfile.ZipFile(jar_path, "r") as jar:
         for name in jar.namelist():
@@ -8154,7 +8185,9 @@ def scan_client_classes(java_files: Dict[str, str]) -> None:
 def write_porting_notes() -> None:
     if not _PORTING_NOTES:
         return
-    out_path = os.path.join(OUTPUT_DIR, "PORTING_NOTES.txt")
+    # Write next to the .mcaddon output, NOT inside OUTPUT_DIR / the pack folder.
+    # The validator flags any .txt inside the pack as extraneous content (PRJINT101).
+    out_path = "PORTING_NOTES.txt"
     categories = {"mixin": [], "capability": [], "network": [], "client-only": [], "other": []}
     for note in _PORTING_NOTES:
         matched = False
@@ -8586,7 +8619,7 @@ def convert_java_item_full(java_code: str, java_path: str, namespace: str):
         components["minecraft:damage"] = int(atk)
         components["minecraft:hand_equipped"] = True
     doc = {
-        "format_version": BP_RP_FORMAT_VERSION,
+        "format_version": BP_ITEM_FORMAT_VERSION,
         "minecraft:item": {
             "description": {
                 "identifier": item_id,
@@ -8839,7 +8872,7 @@ def convert_java_recipe(recipe_data: dict, namespace: str) -> Optional[dict]:
                 item = item[0].get("item", "") if item else ""
             bedrock_key[char] = {"item": item}
         return {
-            "format_version": "1.21.0",
+            "format_version": BP_RECIPE_FORMAT_VERSION,
             "minecraft:recipe_shaped": {
                 "description": {"identifier": f"{namespace}:{sanitize_identifier(str(result_item).split(':')[-1])}_shaped"},
                 "tags": ["crafting_table"],
@@ -8864,7 +8897,7 @@ def convert_java_recipe(recipe_data: dict, namespace: str) -> Optional[dict]:
                 item = item[0].get("item", "") if item else ""
             bedrock_ingredients.append({"item": item})
         return {
-            "format_version": "1.21.0",
+            "format_version": BP_RECIPE_FORMAT_VERSION,
             "minecraft:recipe_shapeless": {
                 "description": {"identifier": f"{namespace}:{sanitize_identifier(str(result_item).split(':')[-1])}_shapeless"},
                 "tags": ["crafting_table"],
@@ -8882,7 +8915,7 @@ def convert_java_recipe(recipe_data: dict, namespace: str) -> Optional[dict]:
                 result = f"{namespace}:{sanitize_identifier(itm)}"
         cook_time = recipe_data.get("cookingtime", 200) / 20
         return {
-            "format_version": "1.21.0",
+            "format_version": BP_RECIPE_FORMAT_VERSION,
             "minecraft:recipe_furnace": {
                 "description": {"identifier": f"{namespace}:{sanitize_identifier(str(result).split(':')[-1])}_furnace"},
                 "tags": ["furnace", "smoker", "blast_furnace"],
@@ -9144,6 +9177,333 @@ def patch_rp_entity_with_controller(entity_basename: str, animations: set,
               f"{', controller wired as ' + repr('ctrl') if controller_id else ''}")
     except Exception as e:
         print(f"[anim_wire] Failed to patch {rp_path}: {e}")
+def prune_orphaned_assets() -> List[str]:
+    """Walk the generated BP/RP and remove files that have no live references.
+
+    Pass 1 — build reference sets from every JSON file that can cite assets.
+    Pass 2 — delete unreferenced textures, geometry, and entity/block files
+             that are missing their required assets.
+
+    Returns a list of human-readable log lines describing what was removed.
+    """
+    removed: List[str] = []
+    try:
+        _prune_orphaned_assets_impl(removed)
+    except Exception as exc:
+        import traceback
+        removed.append(f"[prune-error] Pruner crashed — {exc}")
+        removed.append(f"[prune-error] {traceback.format_exc()}")
+    return removed
+
+
+def _prune_orphaned_assets_impl(removed: List[str]) -> None:
+    """Implementation detail — called by prune_orphaned_assets."""
+
+    # ------------------------------------------------------------------ #
+    # Helper: collect all string values (recursively) from a parsed JSON. #
+    # ------------------------------------------------------------------ #
+    def _all_strings(obj) -> List[str]:
+        if isinstance(obj, str):
+            return [obj]
+        if isinstance(obj, dict):
+            out = []
+            for v in obj.values():
+                out.extend(_all_strings(v))
+            return out
+        if isinstance(obj, list):
+            out = []
+            for v in obj:
+                out.extend(_all_strings(v))
+            return out
+        return []
+
+    def _load_json(path: str):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+
+    def _rel(path: str) -> str:
+        """Relative path from OUTPUT_DIR for logging."""
+        try:
+            return os.path.relpath(path, OUTPUT_DIR).replace("\\", "/")
+        except ValueError:
+            return path
+
+    def _remove(path: str, reason: str) -> None:
+        try:
+            os.remove(path)
+            removed.append(f"[prune] {reason}: {_rel(path)}")
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------ #
+    # Pass 1 — collect referenced identifiers from all JSON files.        #
+    # ------------------------------------------------------------------ #
+
+    # Textures referenced by name (relative path without extension).
+    referenced_textures: set = set()
+    # Geometry identifiers referenced (e.g. "geometry.mymod.spider").
+    referenced_geo_ids: set = set()
+    # Geometry *file* stems referenced (e.g. "spider", "spider.geo").
+    referenced_geo_stems: set = set()
+    # All string values from every JSON — broad net for textures.
+    all_json_strings: set = set()
+
+    json_dirs = [
+        os.path.join(RP_FOLDER, "entity"),
+        os.path.join(RP_FOLDER, "render_controllers"),
+        os.path.join(RP_FOLDER, "items"),
+        os.path.join(RP_FOLDER, "attachables"),
+        os.path.join(BP_FOLDER, "blocks"),
+        os.path.join(BP_FOLDER, "items"),
+        os.path.join(BP_FOLDER, "entities"),
+        os.path.join(RP_FOLDER, "textures"),   # item_texture.json / terrain_texture.json
+    ]
+    for jdir in json_dirs:
+        if not os.path.isdir(jdir):
+            continue
+        for root, _, files in os.walk(jdir):
+            for fname in files:
+                if not fname.endswith(".json"):
+                    continue
+                data = _load_json(os.path.join(root, fname))
+                if data is None:
+                    continue
+                for s in _all_strings(data):
+                    all_json_strings.add(s)
+                    # Texture references: "textures/entity/spider" or bare "entity/spider"
+                    if s.startswith("textures/") or "/" in s:
+                        referenced_textures.add(s)
+                        referenced_textures.add(s.lstrip("textures/"))
+                        referenced_textures.add(os.path.splitext(s)[0])
+                    # Geometry references: "geometry.mymod.spider"
+                    if s.startswith("geometry."):
+                        referenced_geo_ids.add(s)
+                        tail = s[len("geometry."):]
+                        referenced_geo_stems.add(tail)
+                        referenced_geo_stems.add(tail.split(".")[-1])
+
+    # Also collect geometry identifiers declared inside .geo.json files so we
+    # can cross-reference them properly.
+    geo_id_to_file: Dict[str, str] = {}   # "geometry.xxx" -> absolute path
+    geo_stem_to_file: Dict[str, str] = {} # "xxx" -> absolute path
+    for geo_root in [os.path.join(RP_FOLDER, "geometry"), os.path.join(RP_FOLDER, "models")]:
+        if not os.path.isdir(geo_root):
+            continue
+        for fname in os.listdir(geo_root):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(geo_root, fname)
+            data = _load_json(fpath)
+            if not isinstance(data, dict):
+                continue
+            for geo_list in (data.get("minecraft:geometry") or data.get("geometry") or []):
+                if not isinstance(geo_list, dict):
+                    continue
+                ident = (geo_list.get("description") or {}).get("identifier", "")
+                if ident:
+                    geo_id_to_file[ident] = fpath
+                    tail = ident[len("geometry."):] if ident.startswith("geometry.") else ident
+                    geo_stem_to_file[tail] = fpath
+                    geo_stem_to_file[tail.split(".")[-1]] = fpath
+            stem = os.path.splitext(fname)[0]
+            geo_stem_to_file.setdefault(stem, fpath)
+
+    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    # Pass 2a — remove RP entity client files missing geometry (UNLINK332)#
+    # or missing both texture and geometry.  Must run BEFORE texture      #
+    # pruning so dead entity JSONs don't keep their textures alive.       #
+    # ------------------------------------------------------------------ #
+    tex_root = os.path.join(RP_FOLDER, "textures")
+
+    tex_on_disk: set = set()
+    if os.path.isdir(tex_root):
+        for root, _, files in os.walk(tex_root):
+            for f in files:
+                if f.lower().endswith(".png"):
+                    rel = os.path.relpath(os.path.join(root, f), RP_FOLDER).replace("\\", "/")
+                    tex_on_disk.add(rel)
+                    tex_on_disk.add(os.path.splitext(rel)[0])
+
+    geo_on_disk: set = set()
+    for geo_root in [os.path.join(RP_FOLDER, "geometry"), os.path.join(RP_FOLDER, "models")]:
+        if os.path.isdir(geo_root):
+            for f in os.listdir(geo_root):
+                if f.endswith(".json"):
+                    geo_on_disk.add(os.path.splitext(f)[0].lower())
+                    geo_on_disk.add(os.path.splitext(os.path.splitext(f)[0])[0].lower())
+
+    entity_rp_dir = os.path.join(RP_FOLDER, "entity")
+    if os.path.isdir(entity_rp_dir):
+        for fname in os.listdir(entity_rp_dir):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(entity_rp_dir, fname)
+            data = _load_json(fpath)
+            if data is None:
+                continue
+            desc = data.get("minecraft:client_entity", {}).get("description", {})
+            tex_refs = list(desc.get("textures", {}).values())
+            geo_refs = list(desc.get("geometry", {}).values())
+
+            has_texture = any(
+                t in tex_on_disk or os.path.splitext(t)[0] in tex_on_disk
+                or f"textures/{t}" in tex_on_disk
+                for t in tex_refs
+            )
+            has_geo = True
+            if geo_refs:
+                has_geo = False
+                for gid in geo_refs:
+                    tail = gid[len("geometry."):] if gid.startswith("geometry.") else gid
+                    base = tail.split(".")[-1] if "." in tail else tail
+                    if tail.lower() in geo_on_disk or base.lower() in geo_on_disk:
+                        has_geo = True
+                        break
+
+            if not has_texture and not has_geo and (tex_refs or geo_refs):
+                _remove(fpath, "RP entity JSON has no resolvable texture or geometry on disk")
+            elif not has_geo and geo_refs:
+                _remove(
+                    fpath,
+                    f"RP entity JSON references geometry {geo_refs} not found on disk (UNLINK332)"
+                )
+            elif not has_texture and tex_refs:
+                removed.append(
+                    f"[warn] {_rel(fpath)}: missing texture(s) {tex_refs} — kept but will render incorrectly"
+                )
+
+    # ------------------------------------------------------------------ #
+    # Pass 2b — remove orphaned geometry files.                           #
+    # ------------------------------------------------------------------ #
+    for geo_root in [os.path.join(RP_FOLDER, "geometry"), os.path.join(RP_FOLDER, "models")]:
+        if not os.path.isdir(geo_root):
+            continue
+        for fname in os.listdir(geo_root):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(geo_root, fname)
+            stem = os.path.splitext(fname)[0]
+            base = os.path.splitext(stem)[0]
+            matched = (
+                stem in referenced_geo_stems
+                or base in referenced_geo_stems
+                or fpath in geo_id_to_file.values()
+                and any(gid in referenced_geo_ids for gid, gf in geo_id_to_file.items() if gf == fpath)
+            )
+            if not matched:
+                _remove(fpath, "Orphaned geometry file (not referenced by any entity JSON)")
+
+    # ------------------------------------------------------------------ #
+    # Pass 2c — remove orphaned textures.                                 #
+    #                                                                     #
+    # Rebuild the texture reference set from whatever entity/RC JSON      #
+    # files SURVIVE on disk now (after Pass 2a deleted the bad ones).     #
+    # Use exact path matching only — no broad substring checks.           #
+    # ------------------------------------------------------------------ #
+    SAFE_TO_PRUNE = {"entity", "mob_effect", "screens", "environment", "colormap", "misc"}
+
+    live_tex_refs: set = set()
+    live_json_dirs = [
+        os.path.join(RP_FOLDER, "entity"),
+        os.path.join(RP_FOLDER, "render_controllers"),
+        os.path.join(RP_FOLDER, "items"),
+        os.path.join(RP_FOLDER, "attachables"),
+        os.path.join(BP_FOLDER, "items"),
+        os.path.join(RP_FOLDER, "textures"),
+    ]
+    for jdir in live_json_dirs:
+        if not os.path.isdir(jdir):
+            continue
+        for root, _, files in os.walk(jdir):
+            for fname in files:
+                if not fname.endswith(".json"):
+                    continue
+                data = _load_json(os.path.join(root, fname))
+                if data is None:
+                    continue
+                for s in _all_strings(data):
+                    if not s or "/" not in s:
+                        continue
+                    norm = s if s.startswith("textures/") else f"textures/{s}"
+                    norm_no_ext = os.path.splitext(norm)[0]
+                    live_tex_refs.add(norm)
+                    live_tex_refs.add(norm_no_ext)
+                    live_tex_refs.add(s)
+                    live_tex_refs.add(os.path.splitext(s)[0])
+
+    def _tex_is_live(rel: str) -> bool:
+        rel_no_ext = os.path.splitext(rel)[0]
+        return rel in live_tex_refs or rel_no_ext in live_tex_refs
+
+    if os.path.isdir(tex_root):
+        for entry in os.listdir(tex_root):
+            entry_path = os.path.join(tex_root, entry)
+            if os.path.isfile(entry_path) and entry.lower().endswith(".png"):
+                rel = os.path.relpath(entry_path, RP_FOLDER).replace("\\", "/")
+                if not _tex_is_live(rel):
+                    _remove(entry_path, "Orphaned root texture (not referenced by any JSON)")
+            elif os.path.isdir(entry_path) and entry.lower() in SAFE_TO_PRUNE:
+                for root, _, files in os.walk(entry_path):
+                    for fname in files:
+                        if not fname.lower().endswith(".png"):
+                            continue
+                        fpath = os.path.join(root, fname)
+                        rel = os.path.relpath(fpath, RP_FOLDER).replace("\\", "/")
+                        if not _tex_is_live(rel):
+                            _remove(
+                                fpath,
+                                f"Orphaned texture in textures/{entry}/ (not referenced by any surviving JSON)",
+                            )
+
+    # ------------------------------------------------------------------ #
+    # Pass 2d — remove BP block JSON files with no RP counterpart.        #
+    # ------------------------------------------------------------------ #
+    bp_blocks_dir = os.path.join(BP_FOLDER, "blocks")
+    rp_blocks_dir = os.path.join(RP_FOLDER, "blocks")
+    terrain_path  = os.path.join(RP_FOLDER, "textures", "terrain_texture.json")
+    terrain_data  = _load_json(terrain_path) if os.path.exists(terrain_path) else None
+    terrain_keys: set = set()
+    if isinstance(terrain_data, dict):
+        terrain_keys = set((terrain_data.get("texture_data") or {}).keys())
+
+    if os.path.isdir(bp_blocks_dir):
+        for fname in os.listdir(bp_blocks_dir):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(bp_blocks_dir, fname)
+            data  = _load_json(fpath)
+            if data is None:
+                continue
+            desc = (data.get("minecraft:block") or {}).get("description", {})
+            ident: str = desc.get("identifier", "")
+            plain = ident.split(":")[-1] if ":" in ident else os.path.splitext(fname)[0]
+            has_rp = (
+                plain in terrain_keys
+                or ident in terrain_keys
+                or (os.path.isdir(rp_blocks_dir) and fname in os.listdir(rp_blocks_dir))
+            )
+            if not has_rp:
+                _remove(fpath, "BP block JSON has no terrain_texture entry or RP block definition")
+
+    # ------------------------------------------------------------------ #
+    # Clean up empty directories left behind.                             #
+    # ------------------------------------------------------------------ #
+    for folder in [RP_FOLDER, BP_FOLDER]:
+        for root, dirs, files in os.walk(folder, topdown=False):
+            if root == folder:
+                continue
+            if not os.listdir(root):
+                try:
+                    os.rmdir(root)
+                except OSError:
+                    pass
+    # (removed list is mutated in-place; caller returns it)
+
+
 def run_validation_pass() -> list:
     warnings = []
     tex_dir = os.path.join(RP_FOLDER, "textures")
@@ -10022,6 +10382,7 @@ def generate_feature_json(structure_name: str, namespace: str) -> dict:
             "constraints": {
                 "unburied": {},
                 "block_intersection": {
+                    "only_check_intersection_for_motion_blocking_blocks": false,
                     "block_allowlist": [
                         "minecraft:air",
                         "minecraft:grass",
@@ -10595,8 +10956,9 @@ def _enhanced_postpass(namespace: str, java_files: Dict[str, str]) -> None:
     }
     _safe_json_dump(os.path.join(OUTPUT_DIR, 'conversion_report.json'), report)
     if notes:
-        port_notes = os.path.join(BP_FOLDER, 'PORTING_NOTES.txt')
-        os.makedirs(os.path.dirname(port_notes), exist_ok=True)
+        # Write to the pack root, not inside bp/ — files inside bp/ are flagged
+        # as extraneous content by the validator (PRJINT101).
+        port_notes = 'PORTING_NOTES.txt'
         with open(port_notes, 'a', encoding='utf-8') as fh:
             fh.write('\n'.join(notes) + '\n')
 
@@ -10791,6 +11153,17 @@ def run_pipeline():
     with _logger.phase("Writing manifests", total=0, unit="step", colour="blue"):
         write_manifest_for(BP_FOLDER, pack_display_name, "BP")
         write_manifest_for(RP_FOLDER, pack_display_name, "RP")
+    with _logger.phase("Pruning orphaned assets", total=0, unit="step", colour="yellow"):
+        prune_log = prune_orphaned_assets()
+        for line in prune_log:
+            if line.startswith("[prune]"):
+                _logger._original_print(f"      {line}")
+        prune_removed = sum(1 for l in prune_log if l.startswith("[prune]"))
+        prune_warned  = sum(1 for l in prune_log if l.startswith("[warn]"))
+        if prune_removed or prune_warned:
+            _logger._original_print(
+                f"    Pruner: removed {prune_removed} file(s), {prune_warned} warning(s)"
+            )
     with _logger.phase("Writing porting notes", total=0, unit="step", colour="yellow"):
         write_porting_notes()
     validation_warnings = []
@@ -12770,8 +13143,9 @@ def _enhanced_postpass(namespace: str, java_files: Dict[str, str]) -> None:
     }
     _safe_json_dump(os.path.join(OUTPUT_DIR, 'conversion_report.json'), report)
     if notes:
-        port_notes = os.path.join(BP_FOLDER, 'PORTING_NOTES.txt')
-        os.makedirs(os.path.dirname(port_notes), exist_ok=True)
+        # Write to the pack root, not inside bp/ — files inside bp/ are flagged
+        # as extraneous content by the validator (PRJINT101).
+        port_notes = 'PORTING_NOTES.txt'
         with open(port_notes, 'a', encoding='utf-8') as fh:
             fh.write('\n'.join(notes) + '\n')
 
@@ -12870,6 +13244,169 @@ def _extract_method_annotation_bundle(code: str, method_name: str) -> Tuple[List
         hm = re.search(r'([\w<>,\[\].?$]+)\s+' + re.escape(method_name) + r'\s*\(', header)
         ret_type = hm.group(1) if hm else ''
     return annotations, ann or '', header or '', body or '', params, ret_type or None
+
+def _infer_target_event(
+    target_cls: str,
+    method_name: str,
+    body: str,
+    at_name: str,
+    raw: str,
+) -> Optional[str]:
+    """Infer the Bedrock scripting API event string from mixin context.
+
+    Parameters mirror what _event_subscription_lines extracts:
+      target_cls  – the @Mixin target class name (e.g. 'ServerPlayer')
+      method_name – the Java method being injected into
+      body        – raw Java method body source
+      at_name     – the @At value string (e.g. 'HEAD', 'RETURN', 'INVOKE')
+      raw         – full raw annotation text for extra keyword scanning
+    """
+    needle = f'{target_cls} {method_name} {body} {at_name} {raw}'.lower()
+
+    # Tick / scheduled update
+    if any(k in needle for k in (
+        'tick', 'update', 'inventorytick', 'servertick', 'clienttick', 'aiset', 'dotick',
+    )):
+        return 'system.runInterval'
+
+    # Chat
+    if any(k in needle for k in ('chat', 'sendchat', 'chatsend', 'message')):
+        return 'world.beforeEvents.chatSend'
+
+    # Hurt / damage / attack
+    if any(k in needle for k in ('hurt', 'damage', 'attack', 'hurtentity', 'actuallyhurt')):
+        return 'world.afterEvents.entityHurt'
+
+    # Death
+    if any(k in needle for k in ('death', 'die', 'killed', 'ondeath')):
+        return 'world.afterEvents.entityDie'
+
+    # Spawn / join world
+    if any(k in needle for k in ('spawn', 'join', 'entityjoin', 'addedtolevel', 'construct')):
+        return 'world.afterEvents.entitySpawn'
+
+    # Explosion
+    if any(k in needle for k in ('explode', 'explosion', 'detonate')):
+        return 'world.afterEvents.explosion'
+
+    # Block break / mine
+    if any(k in needle for k in ('break', 'destroy', 'mine', 'removeblock', 'leftclickblock', 'blockbreak')):
+        return 'world.afterEvents.playerBreakBlock'
+
+    # Block place / interact with block
+    if any(k in needle for k in ('place', 'useon', 'blockactivated', 'interactblock', 'rightclickblock', 'blockplace')):
+        return 'world.afterEvents.playerPlaceBlock'
+
+    # Item use / finish using
+    if any(k in needle for k in ('itemuse', 'useitem', 'finishusingitem', 'appendtooltip', 'usetick')):
+        return 'world.afterEvents.itemUse'
+
+    # Entity interaction (right-click entity)
+    if any(k in needle for k in ('interact', 'rightclick', 'interactat', 'mount', 'attackentity')):
+        return 'world.afterEvents.playerInteractWithEntity'
+
+    # Item pickup / drop
+    if any(k in needle for k in ('pickup', 'pickupitem', 'itempickup')):
+        return 'world.afterEvents.entitySpawn'
+    if any(k in needle for k in ('drop', 'toss', 'throw', 'dropitem')):
+        return 'world.afterEvents.entitySpawn'
+
+    # Craft
+    if any(k in needle for k in ('craft', 'crafted', 'craftitem')):
+        return 'world.afterEvents.itemCompleteUse'
+
+    # Generic block / tile-entity / worldgen fallback
+    if any(k in needle for k in ('block', 'tileentity', 'worldgen', 'chunkload')):
+        return 'world.afterEvents.playerPlaceBlock'
+
+    return None
+
+
+def _param_binding_expr(java_type: str) -> str:
+    """Return a JS expression that extracts the right value from a Bedrock event
+    for a given Java parameter type.
+
+    Used inside _event_subscription_lines to auto-bind event properties to the
+    parameter names expected by the translated mixin wrapper function.
+    """
+    base = java_type.strip()
+    # Strip generics and arrays
+    base = re.sub(r'<[^>]*>', '', base).replace('[]', '').strip()
+
+    player_types = {
+        'Player', 'ServerPlayer', 'LocalPlayer', 'AbstractPlayer',
+        'EntityPlayer', 'EntityPlayerMP',
+    }
+    entity_types = {
+        'Entity', 'LivingEntity', 'Mob', 'PathfinderMob',
+        'Animal', 'Monster', 'Creeper', 'Zombie', 'Skeleton',
+    }
+    item_types = {'ItemStack', 'Item', 'ItemType'}
+    block_pos_types = {'BlockPos', 'Vec3i', 'ChunkPos'}
+    vec_types = {'Vec3', 'Vector3f', 'Vector3d'}
+    level_types = {'Level', 'ServerLevel', 'World', 'ServerWorld', 'Dimension'}
+    damage_types = {'DamageSource', 'EntityDamageSource'}
+
+    if base in player_types:
+        return 'event.player ?? event.entity'
+    if base in entity_types:
+        return 'event.entity ?? event.hurtEntity ?? event.damagingEntity'
+    if base in item_types:
+        return 'event.itemStack ?? event.item'
+    if base in block_pos_types:
+        return 'event.block?.location ?? event.blockLocation'
+    if base in vec_types:
+        return 'event.entity?.location ?? event.player?.location'
+    if base in level_types:
+        return 'event.entity?.dimension ?? event.player?.dimension ?? world.getDimension("overworld")'
+    if base in damage_types:
+        return 'event.damageSource ?? event.cause'
+    if base in ('float', 'double', 'int', 'long', 'short', 'byte'):
+        return '0'
+    if base == 'boolean':
+        return 'false'
+    if base == 'String':
+        return '""'
+
+    # Generic fallback – expose the whole event and let the developer refine
+    return 'event'
+
+
+def _translate_java_body_to_js(body: str, namespace: str, safe_name: str) -> List[str]:
+    """Translate a raw Java method body string to a list of JavaScript lines.
+
+    Delegates to the AST-based translator when javalang is available; falls
+    back to line-by-line comment passthrough so the output is always valid JS.
+    """
+    if not body:
+        return []
+
+    if JAVALANG_AVAILABLE:
+        try:
+            dummy = f'public class Dummy {{ void d() {{ {body} }} }}'
+            tree = javalang.parse.parse(dummy)
+            lines: List[str] = []
+            for _, node in tree.filter(javalang.tree.MethodDeclaration):
+                if node.name != 'd':
+                    continue
+                for stmt in node.body or []:
+                    lines.extend(
+                        translate_statement(stmt, 'entity', namespace, JavaSymbolTable())
+                    )
+            if lines:
+                return lines
+        except Exception:
+            pass
+
+    # Fallback: emit each non-empty source line as a JS comment so the
+    # surrounding function scaffold at least stays syntactically valid.
+    out: List[str] = []
+    for ln in body.splitlines():
+        stripped = ln.rstrip()
+        if stripped:
+            out.append('    // ' + stripped)
+    return out
+
 
 def _event_subscription_lines(
     target_cls: str,
