@@ -12,54 +12,73 @@ import subprocess
 import re
 from typing import Optional, Tuple, Dict, Set, List, Union
 
-Tool_Version = "1.5.2.1"
+
+def _silent_print(*args, **kwargs):
+    return None
+
+builtins.print = _silent_print
+
+Tool_Version = "1.5.3.1"
 try:
-    from tqdm import tqdm as _tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-    _tqdm = None
+    from progress.bar import Bar as _ProgressBar
+    PROGRESS_AVAILABLE = True
+except Exception:
+    try:
+        subprocess.check_call([
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "progress",
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        from progress.bar import Bar as _ProgressBar
+        PROGRESS_AVAILABLE = True
+    except Exception:
+        PROGRESS_AVAILABLE = False
+
+        class _ProgressBar:
+            def __init__(self, message: str = "", max: int = 1):
+                self.message = message
+                self.max = max if max and max > 0 else 1
+                self.index = 0
+                self.suffix = ""
+                self._width = 36
+                self._render()
+
+            def _render(self, final: bool = False):
+                filled = int(self._width * self.index / self.max)
+                filled = max(0, min(self._width, filled))
+                bar = "█" * filled + "░" * (self._width - filled)
+                percent = int(100 * self.index / self.max)
+                line = f"\r  {self.message:<32} {bar}  {percent:3d}%  {self.index}/{self.max}"
+                if self.suffix:
+                    line += f"  {self.suffix}"
+                sys.stdout.write(line + ("\n" if final else ""))
+                sys.stdout.flush()
+
+            def next(self, n: int = 1):
+                self.index = min(self.max, self.index + n)
+                self._render(final=self.index >= self.max)
+
+            def finish(self):
+                self.index = self.max
+                self._render(final=True)
 
 
 class _ProgressLogger:
-    _WARN_PATTERNS = (
-        "", "warn", "Warn", "WARN", "[WARN]",
-        "missing", "Missing", "placeholder", "fallback",
-        "skipped", "Skipped",
-    )
-    _ERROR_PATTERNS = (
-        "", "error", "Error", "ERROR",
-        "failed", "Failed", "exception", "Exception",
-        "crash", "Crash",
-    )
     def __init__(self):
         self._original_print = builtins.print
         self._active_bar = None
         self._intercepting = False
-        self._deferred_messages: list = []
 
     def write(self, *args, **kwargs):
-        text = " ".join(str(a) for a in args)
-        if self._intercepting and self._active_bar is not None:
-            if self._is_visible(text):
-                _tqdm.write(self._format(text))
-        else:
-            kw = {k: v for k, v in kwargs.items() if k != "end"}
-            self._original_print(text, **kw)
+        return None
 
     def warn(self, text: str):
-        msg = f"    {text}"
-        if self._intercepting and self._active_bar is not None:
-            _tqdm.write(msg)
-        else:
-            self._original_print(msg)
+        return None
 
     def error(self, text: str):
-        msg = f"    {text}"
-        if self._intercepting and self._active_bar is not None:
-            _tqdm.write(msg)
-        else:
-            self._original_print(msg)
+        return None
 
     class _Phase:
         def __init__(self, logger, desc, total, unit, colour):
@@ -71,25 +90,23 @@ class _ProgressLogger:
             self._bar = None
 
         def __enter__(self):
-            if TQDM_AVAILABLE:
-                bar_fmt = (
-                    "  {desc:<38} {bar} {percentage:3.0f}%  "
-                    "{n_fmt}/{total_fmt} {unit} [{elapsed}]{postfix}"
+            try:
+                self._bar = _ProgressBar(
+                    self._desc,
+                    max=self._total if self._total > 0 else 1,
+                    file=sys.stdout,
+                    check_tty=False,
                 )
-                self._bar = _tqdm(
-                    total=self._total if self._total > 0 else None,
-                    desc=self._desc,
-                    unit=self._unit,
-                    colour=self._colour,
-                    bar_format=bar_fmt if self._total > 0 else None,
-                    dynamic_ncols=True,
-                    leave=True,
-                )
-                self._logger._active_bar = self._bar
-                self._logger._intercepting = True
-                builtins.print = self._logger.write
-            else:
-                builtins.print(f"\n── {self._desc} ──")
+            except TypeError:
+                self._bar = _ProgressBar(self._desc, max=self._total if self._total > 0 else 1)
+            self._bar.suffix = f"0/{self._bar.max} {self._unit}"
+            self._logger._active_bar = self._bar
+            self._logger._intercepting = True
+            builtins.print = self._logger.write
+            try:
+                self._bar.next(0)
+            except Exception:
+                pass
             return self
 
         def __exit__(self, *_):
@@ -97,38 +114,33 @@ class _ProgressLogger:
             self._logger._intercepting = False
             self._logger._active_bar = None
             if self._bar is not None:
-                self._bar.close()
+                try:
+                    if getattr(self._bar, 'index', 0) < getattr(self._bar, 'max', 1):
+                        self._bar.next(getattr(self._bar, 'max', 1) - getattr(self._bar, 'index', 0))
+                    elif hasattr(self._bar, 'finish'):
+                        self._bar.finish()
+                except Exception:
+                    pass
 
         def update(self, n: int = 1):
             if self._bar:
-                self._bar.update(n)
+                self._bar.next(n)
 
         def set_postfix_str(self, s: str):
             if self._bar:
-                self._bar.set_postfix_str(s, refresh=False)
+                self._bar.suffix = s
 
         def set_description(self, s: str):
             if self._bar:
-                self._bar.set_description(s, refresh=True)
+                self._bar.message = s
 
     def phase(self, desc: str, total: int = 0,
               unit: str = "file", colour: str = "cyan"):
         return self._Phase(self, desc, total, unit, colour)
 
-    def _is_visible(self, text: str) -> bool:
-        for p in self._ERROR_PATTERNS:
-            if p in text:
-                return True
-        for p in self._WARN_PATTERNS:
-            if p in text:
-                return True
-        return False
-    @staticmethod
-    def _format(text: str) -> str:
-        return f"    {text}"
-
 
 _logger = _ProgressLogger()
+_logger._original_print = _silent_print
 _ALL_JAVA_FILES: Dict[str, str] = {}
 _RP_ASSET_INDEX: Dict[str, Union[list, dict]] = {
     "textures": [],
@@ -142,7 +154,7 @@ except Exception:
     subprocess.check_call([
         sys.executable,
         "-m", "pip", "install", "pillow"
-    ])
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     PIL_AVAILABLE = True
 JAVALANG_AVAILABLE = False
 try:
@@ -150,7 +162,7 @@ try:
     JAVALANG_AVAILABLE = True
 except ImportError:
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "javalang"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "javalang"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         import javalang
         JAVALANG_AVAILABLE = True
     except Exception:
@@ -1649,7 +1661,7 @@ class JavaGUIConverter:
     @staticmethod
     def generate_modal_form_js(gui_info: Dict, namespace: str) -> list:
         cls = gui_info['class_name']
-        safe = sanitize_identifier(cls)
+        safe = clean_java_artifact_name(cls)
         title = gui_info.get('title') or cls
         lines = [
             f'// GUI Form: {cls} → Bedrock ModalFormData',
@@ -2029,6 +2041,78 @@ def sanitize_identifier(name: Optional[str]) -> str:
         s = s.replace('..', '.')
     s = s.strip('._')
     return s
+def clean_java_artifact_name(name: Optional[str]) -> str:
+    """Return a Bedrock-friendly base name with common Java suffixes removed.
+
+    This trims noisy suffixes frequently produced by Java/MCreator class names,
+    such as:
+      * MobEffect
+      * ModVariables
+      * Entity / Block / Item / Model / Renderer / Factory
+    """
+    if not name:
+        return ""
+
+    raw = str(name).strip()
+    slug = re.sub(r'[^A-Za-z0-9]+', '', raw).lower()
+    if not slug:
+        return ""
+
+    original = slug
+    suffixes = (
+        'entityanimationfactory',
+        'modvariables',
+        'mobeffect',
+        'blockentity',
+        'tileentity',
+        'renderer',
+        'factory',
+        'feature',
+        'entity',
+        'block',
+        'model',
+        'screen',
+        'menu',
+        'item',
+        'effect',
+    )
+
+    changed = True
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if slug.endswith(suffix) and len(slug) > len(suffix) + 2:
+                candidate = slug[:-len(suffix)]
+                if candidate:
+                    slug = candidate
+                    changed = True
+                    break
+
+    return sanitize_identifier(slug) or sanitize_identifier(original) or sanitize_identifier(raw)
+
+
+_ENTITY_ARTIFACT_SKIP_MARKERS = (
+    'mobeffect',
+    'modvariables',
+    'animation',
+    'mixin',
+    'utils',
+    'utility',
+    'effect',
+    'helper',
+)
+
+
+def _should_skip_entity_artifact(java_code: str, filename: str = '', cls_name: Optional[str] = None) -> bool:
+    haystack_parts = [
+        cls_name or '',
+        os.path.basename(filename) or '',
+        os.path.splitext(os.path.basename(filename))[0] if filename else '',
+        java_code[:400] if java_code else '',
+    ]
+    haystack = ' '.join(part for part in haystack_parts if part).lower()
+    return any(marker in haystack for marker in _ENTITY_ARTIFACT_SKIP_MARKERS)
+
 def sanitize_filename_keep_ext(filename: str) -> str:
     base, ext = os.path.splitext(filename)
     base_s = base.lower()
@@ -3242,7 +3326,7 @@ def scan_and_convert_layerdefinition_models(
                 or 'getModelResource' in code or 'getAnimationResource' in code):
             continue
         cls_name   = extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
-        model_stem = sanitize_identifier(cls_name)
+        model_stem = clean_java_artifact_name(cls_name)
         out_path   = os.path.join(RP_FOLDER, "geometry", f"{model_stem}.geo.json")
         if os.path.exists(out_path):
             try:
@@ -5071,12 +5155,14 @@ _ENTITY_METHOD_NAMES = {
 }
 def is_likely_entity(java_code: str, filename: str) -> bool:
     fname = os.path.basename(filename).lower()
+    cls = extract_class_name(java_code) or ""
+    if _should_skip_entity_artifact(java_code, filename, cls):
+        return False
     has_override = any(k in fname for k in ENTITY_OVERRIDE_KEYWORDS)
     if not has_override:
         for k in NON_ENTITY_KEYWORDS:
             if k in fname:
                 return False
-    cls = extract_class_name(java_code) or ""
     if cls.lower().endswith("entity"):
         return True
     _SUPERCLASS_SUFFIXES = (
@@ -5443,7 +5529,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
         print(f" Failed to read {java_path}: {e}")
         stats["errors"].append(f"read:{java_path}:{e}")
         return
-    if not is_likely_entity(java_code, java_path):
+    if not is_likely_entity(java_code, java_path) or _should_skip_entity_artifact(java_code, java_path, extract_class_name(java_code)):
         stats["skipped_files"].append(java_path)
         return
 
@@ -5452,7 +5538,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
 
     parts = entity_identifier.split(":")
     namespace = sanitize_identifier(parts[0]) if parts else "converted"
-    entity_name = sanitize_identifier(parts[1]) if len(parts) > 1 else sanitize_identifier("entity")
+    entity_name = clean_java_artifact_name(parts[1]) if len(parts) > 1 else clean_java_artifact_name("entity")
     clean_identifier = f"{namespace}:{entity_name}"
     ai_goals = extract_ai_goals_from_java(java_code)
     animations = extract_animations_from_java(java_code, namespace, entity_name)
@@ -5819,7 +5905,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
         anim_json["animations"][f"{base_id}.run"] = {"loop": True, "animation_length": 0.4}
         anim_json["animations"][f"{base_id}.attack"] = {"loop": False, "animation_length": 0.5}
         primary_animation_key = idle_id
-    entity_basename = sanitize_identifier(os.path.splitext(os.path.basename(java_path))[0])
+    entity_basename = clean_java_artifact_name(os.path.splitext(os.path.basename(java_path))[0])
     anim_json_path_rp = os.path.join(RP_FOLDER, "animations", f"{entity_basename}.animation.json")
     if not os.path.exists(anim_json_path_rp):
         safe_write_json(anim_json_path_rp, anim_json)
@@ -7050,7 +7136,9 @@ def run_class_decompiler(jar_file, output_dir):
             ["java", "-jar", os.path.abspath(lib_jar), 
              os.path.abspath(jar_file), os.path.abspath(output_dir)],
             cwd=script_dir,
-            check=True
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         return extracted_engine
 
@@ -7125,7 +7213,7 @@ JAVA_BLOCK_MATERIAL_MAP = {
 }
 def convert_java_block_full(java_code: str, java_path: str, namespace: str):
     cls = extract_class_name(java_code) or os.path.splitext(os.path.basename(java_path))[0]
-    safe_name = sanitize_identifier(cls)
+    safe_name = clean_java_artifact_name(cls)
     block_id = f"{namespace}:{safe_name}"
     props = extract_block_properties_from_java(java_code)
     mat_raw = re.search(r'Material\.([A-Z_]+)', java_code)
@@ -7771,7 +7859,7 @@ def scan_mixins(java_files: Dict[str, str], namespace: str) -> None:
             continue
         target_cls = mixin_m.group(1)
         cls_name = extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
-        safe_name = sanitize_identifier(cls_name)
+        safe_name = clean_java_artifact_name(cls_name)
 
         inject_methods = re.findall(
             r'@Inject\s*\([^)]*method\s*=\s*["\'](\w+)["\'][^)]*\)[^{]*'
@@ -7867,7 +7955,7 @@ def scan_capabilities(java_files: Dict[str, str], namespace: str) -> None:
         if not is_cap:
             continue
         cls_name = extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
-        safe_name = sanitize_identifier(cls_name)
+        safe_name = clean_java_artifact_name(cls_name)
 
         is_energy = bool(re.search(r'IEnergyStorage', code))
         is_fluid = bool(re.search(r'IFluidHandler', code))
@@ -8567,7 +8655,7 @@ def generate_scripting_stub(java_code: str, safe_name: str, item_id: str, namesp
 
 def convert_java_item_full(java_code: str, java_path: str, namespace: str):
     cls = extract_class_name(java_code) or os.path.splitext(os.path.basename(java_path))[0]
-    safe_name = sanitize_identifier(cls)
+    safe_name = clean_java_artifact_name(cls)
     item_id = f"{namespace}:{safe_name}"
     max_stack = 64
     m = re.search(r'(?:maxStackSize|stacksTo)\s*\(?\s*(\d+)', java_code, re.I)
@@ -10766,14 +10854,14 @@ def _emit_accessor_stub(cls_name: str, method_name: str, annotation_args: str) -
     lines = [f'// @Accessor {method_name}']
     if is_setter:
         lines += [
-            f'export function {sanitize_identifier(cls_name)}_{sanitize_identifier(method_name)}(target, value) {{',
+            f'export function {clean_java_artifact_name(cls_name)}_{sanitize_identifier(method_name)}(target, value) {{',
             f'    if (!target) return;',
             f'    target[{json.dumps(member)}] = value;',
             '}',
         ]
     else:
         lines += [
-            f'export function {sanitize_identifier(cls_name)}_{sanitize_identifier(method_name)}(target) {{',
+            f'export function {clean_java_artifact_name(cls_name)}_{sanitize_identifier(method_name)}(target) {{',
             f'    if (!target) return undefined;',
             f'    return target[{json.dumps(member)}];',
             '}',
@@ -10781,7 +10869,7 @@ def _emit_accessor_stub(cls_name: str, method_name: str, annotation_args: str) -
     return lines
 
 def _emit_invoker_stub(cls_name: str, method_name: str) -> list[str]:
-    sid = sanitize_identifier(cls_name)
+    sid = clean_java_artifact_name(cls_name)
     mid = sanitize_identifier(method_name)
     return [
         f'// @Invoker {method_name}',
@@ -10822,7 +10910,7 @@ def scan_mixins(java_files: Dict[str, str], namespace: str) -> list[str]:
             continue
 
         cls_name = extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
-        safe_name = sanitize_identifier(cls_name)
+        safe_name = clean_java_artifact_name(cls_name)
         targets = _extract_mixin_targets(code)
         methods = _extract_annotated_methods(code)
         if not methods and '@Mixin' not in code:
@@ -11081,6 +11169,7 @@ def run_pipeline():
                 is_block = sum(block_content_signals) >= 2 or (fname_block_hint and sum(block_content_signals) >= 1)
                 entity_candidate = (
                     is_likely_entity(code, path)
+                    and not _should_skip_entity_artifact(code, path, cls_for_graph)
                     and not (is_item  and not fname_entity_hint)
                     and not (is_block and not fname_entity_hint)
                     and not fname_noise
@@ -11107,7 +11196,7 @@ def run_pipeline():
                                 raw = m.group(1)
                                 reg_name = raw if ":" in raw else f"{namespace}:{raw}"
                                 break
-                        entity_identifier = reg_name or f"{namespace}:{sanitize_identifier(cls)}"
+                        entity_identifier = reg_name or f"{namespace}:{clean_java_artifact_name(cls)}"
                     convert_java_to_bedrock(path, entity_identifier, gecko_maps, geom_file_map, geom_ns_map, anim_key_map, stats)
             except Exception as e:
                 print(f" Error processing {fname}: {e}")
@@ -12209,7 +12298,7 @@ def scan_mixins(java_files: Dict[str, str], namespace: str) -> None:
 
         target_cls = _mixin_target_name(code) or extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
         cls_name = extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
-        safe_name = sanitize_identifier(cls_name)
+        safe_name = clean_java_artifact_name(cls_name)
 
         inject_methods = re.findall(
             r'@Inject\s*\([^)]*method\s*=\s*["\']([^"\']+)["\'][^)]*\)[^{]*'
@@ -13014,7 +13103,7 @@ def scan_mixins(java_files: Dict[str, str], namespace: str) -> list[str]:
             continue
         target = _extract_mixin_target(code)
         cls_name = JavaAST(code).primary_class_name() or os.path.splitext(os.path.basename(path))[0]
-        safe_name = sanitize_identifier(cls_name)
+        safe_name = clean_java_artifact_name(cls_name)
         script_lines = [f'import {{ world, system }} from "@minecraft/server";', '']
         wrote = False
         if target:
