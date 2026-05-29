@@ -12,62 +12,73 @@ import subprocess
 import re
 from typing import Optional, Tuple, Dict, Set, List, Union
 
-
+_REAL_PRINT = builtins.print
 def _silent_print(*args, **kwargs):
     return None
 
 builtins.print = _silent_print
 
+class _SilentStream:
+    def write(self, text):
+
+        if text.startswith(""):
+            _REAL_PRINT(text, end="")
+        return len(text)
+
+    def flush(self):
+        return None
+
+sys.stderr = _SilentStream()
+
 Tool_Version = "1.5.3.1"
-try:
-    from progress.bar import Bar as _ProgressBar
-    PROGRESS_AVAILABLE = True
-except Exception:
-    try:
-        subprocess.check_call([
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "progress",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        from progress.bar import Bar as _ProgressBar
-        PROGRESS_AVAILABLE = True
-    except Exception:
-        PROGRESS_AVAILABLE = False
+PROGRESS_AVAILABLE = True
 
-        class _ProgressBar:
-            def __init__(self, message: str = "", max: int = 1):
-                self.message = message
-                self.max = max if max and max > 0 else 1
-                self.index = 0
-                self.suffix = ""
-                self._width = 36
-                self._render()
+class _ProgressBar:
+    _CYAN   = "\033[36m"
+    _GREEN  = "\033[32m"
+    _DIM    = "\033[2m"
+    _RESET  = "\033[0m"
+    _BAR_W  = 40
 
-            def _render(self, final: bool = False):
-                filled = int(self._width * self.index / self.max)
-                filled = max(0, min(self._width, filled))
-                bar = "█" * filled + "░" * (self._width - filled)
-                percent = int(100 * self.index / self.max)
-                line = f"\r  {self.message:<32} {bar}  {percent:3d}%  {self.index}/{self.max}"
-                if self.suffix:
-                    line += f"  {self.suffix}"
-                sys.stdout.write(line + ("\n" if final else ""))
-                sys.stdout.flush()
+    def __init__(self, message: str = "", max: int = 1):
+        self.message = message
+        self.max = max if max and max > 0 else 1
+        self.index = 0
+        self.suffix = ""
+        self._render()
 
-            def next(self, n: int = 1):
-                self.index = min(self.max, self.index + n)
-                self._render(final=self.index >= self.max)
+    def _render(self, final: bool = False):
+        filled = int(self._BAR_W * self.index / self.max)
+        filled = max(0, min(self._BAR_W, filled))
+        empty  = self._BAR_W - filled
 
-            def finish(self):
-                self.index = self.max
-                self._render(final=True)
+   
+        bar_filled = self._CYAN + "━" * filled + self._RESET
+        bar_empty  = self._DIM  + "╌" * empty  + self._RESET
 
+        percent = int(100 * self.index / self.max)
+        count   = f"{self.index}/{self.max}"
+
+        label_colour = self._GREEN if final else self._CYAN
+        label = f"{label_colour}{self.message}{self._RESET}"
+
+        suffix_part = f"  {self._DIM}{self.suffix}{self._RESET}" if self.suffix else ""
+        line = f"\r  {label:<40} {bar_filled}{bar_empty}  {percent:3d}%  {count}{suffix_part}"
+
+        sys.stdout.write(line + ("\n" if final else ""))
+        sys.stdout.flush()
+
+    def next(self, n: int = 1):
+        self.index = min(self.max, self.index + n)
+        self._render(final=self.index >= self.max)
+
+    def finish(self):
+        self.index = self.max
+        self._render(final=True)
 
 class _ProgressLogger:
     def __init__(self):
-        self._original_print = builtins.print
+        self._original_print = _REAL_PRINT
         self._active_bar = None
         self._intercepting = False
 
@@ -90,23 +101,11 @@ class _ProgressLogger:
             self._bar = None
 
         def __enter__(self):
-            try:
-                self._bar = _ProgressBar(
-                    self._desc,
-                    max=self._total if self._total > 0 else 1,
-                    file=sys.stdout,
-                    check_tty=False,
-                )
-            except TypeError:
-                self._bar = _ProgressBar(self._desc, max=self._total if self._total > 0 else 1)
+            self._bar = _ProgressBar(self._desc, max=self._total if self._total > 0 else 1)
             self._bar.suffix = f"0/{self._bar.max} {self._unit}"
             self._logger._active_bar = self._bar
             self._logger._intercepting = True
             builtins.print = self._logger.write
-            try:
-                self._bar.next(0)
-            except Exception:
-                pass
             return self
 
         def __exit__(self, *_):
@@ -138,9 +137,8 @@ class _ProgressLogger:
               unit: str = "file", colour: str = "cyan"):
         return self._Phase(self, desc, total, unit, colour)
 
-
 _logger = _ProgressLogger()
-_logger._original_print = _silent_print
+_warn = lambda *a: None
 _ALL_JAVA_FILES: Dict[str, str] = {}
 _RP_ASSET_INDEX: Dict[str, Union[list, dict]] = {
     "textures": [],
@@ -1133,7 +1131,6 @@ class RecursiveNBTSerializer:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         with open(out_path, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(lines))
-        print(f'[nbt] Wrote {out_path}')
 
 class CapabilityRegistry:
 
@@ -1730,7 +1727,6 @@ class JavaGUIConverter:
         os.makedirs(os.path.dirname(js_path), exist_ok=True)
         with open(js_path, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(js_lines))
-        print(f'[gui] {gui_info["class_name"]} → {safe}_controls.json + ui_{safe}.js')
 
 class DependencyRegistry:
 
@@ -1869,7 +1865,6 @@ class GlobalCapabilityRegistry:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         with open(out_path, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(GlobalCapabilityRegistry.generate_registry_js(namespace)))
-        print(f'[cap_registry] Wrote {out_path}')
 
     @staticmethod
     def ensure_import_in_main(bp_folder: str) -> None:
@@ -1893,10 +1888,10 @@ def log_critical_failure(message: str):
 OUTPUT_DIR = "Bedrock_Pack"
 BP_FOLDER = os.path.join(OUTPUT_DIR, "bp")
 RP_FOLDER = os.path.join(OUTPUT_DIR, "rp")
-BP_RP_FORMAT_VERSION       = "1.26.20"   # BP entity / block
-BP_ITEM_FORMAT_VERSION     = "1.26.20"   # BP item   (FORMATVER140 / ITEMTYPE120)
-BP_RECIPE_FORMAT_VERSION   = "1.26.20"   # BP recipe (FORMATVER160)
-RP_ENTITY_FORMAT_VERSION   = "1.26.20"   # RP client entity (FORMATVER300)
+BP_RP_FORMAT_VERSION       = "1.26.20"
+BP_ITEM_FORMAT_VERSION     = "1.26.20"
+BP_RECIPE_FORMAT_VERSION   = "1.26.20"
+RP_ENTITY_FORMAT_VERSION   = "1.26.20"
 RP_LEGACY_RENDER_FORMAT = "1.10.0"
 RP_LEGACY_ANIM_FORMAT = "1.10.0"
 VALID_ICON_SIZES = [2, 4, 8, 16, 32, 64, 128, 256]
@@ -1993,10 +1988,6 @@ def create_manifest(pack_name: str, pack_type: str, has_scripting: bool = False)
             "version": "1.0.0",
             "entry": "scripts/main.js"
         })
-        # Note: do NOT add a "capabilities" array here.
-        # In Bedrock, scripting is declared by having a module with type "script";
-        # the "capabilities" field is for things like "editorExtension", and
-        # including "script" there is invalid (CHKMANIF117).
     return manifest
 def write_manifest_for(folder: str, pack_name: str, pack_type: str):
     path = os.path.join(folder, "manifest.json")
@@ -2090,7 +2081,6 @@ def clean_java_artifact_name(name: Optional[str]) -> str:
 
     return sanitize_identifier(slug) or sanitize_identifier(original) or sanitize_identifier(raw)
 
-
 _ENTITY_ARTIFACT_SKIP_MARKERS = (
     'mobeffect',
     'modvariables',
@@ -2101,7 +2091,6 @@ _ENTITY_ARTIFACT_SKIP_MARKERS = (
     'effect',
     'helper',
 )
-
 
 def _should_skip_entity_artifact(java_code: str, filename: str = '', cls_name: Optional[str] = None) -> bool:
     haystack_parts = [
@@ -2172,14 +2161,14 @@ def find_jar_file(search_dir=".") -> Optional[str]:
         if not f.endswith(".jar"):
             continue
         if any(f.lower().endswith(s) for s in SKIP_SUFFIXES):
-            print(f"Skipping auxiliary JAR file: {f}")
+
             continue
         candidates.append(os.path.join(search_dir, f))
     if not candidates:
         return None
     if len(candidates) > 1:
-        print(f"Warning: Multiple JAR files found: {[os.path.basename(c) for c in candidates]}")
-        print(f"Using: {os.path.basename(candidates[0])}. Move others out of this directory if incorrect.")
+        _warn(f"Warning: Multiple JAR files found: {[os.path.basename(c) for c in candidates]}")
+
     return candidates[0]
 def detect_loader_from_jar(jar_path: str) -> str:
     try:
@@ -2249,15 +2238,9 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                     if after:
                         first = after[0].lower()
                         category = _normalize_texture_subfolder(first)
-                        # Only treat `first` as a real subfolder if it's a known
-                        # texture category name (entity, items, blocks …).  If the
-                        # JAR has an entry like "screenshot.png/actual_file.png",
-                        # `first` will contain a ".png" extension — that's a sign
-                        # the segment is a filename masquerading as a directory and
-                        # we should flatten the whole thing to textures/.
                         first_is_category = (
-                            category != first          # _normalize changed it → known alias
-                            or first in (              # explicit known pass-through names
+                            category != first         
+                            or first in (         
                                 "entity", "entities", "mob", "mobs",
                                 "item", "items", "block", "blocks",
                                 "mob_effect", "particle", "environment",
@@ -2265,21 +2248,20 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                                 "painting", "armor", "font", "effect",
                                 "screens", "screen",
                             )
-                        ) and "." not in first        # a real folder never has an extension
+                        ) and "." not in first 
                         if first_is_category and len(after) > 1:
                             dest_dir = os.path.join(resource_pack, "textures", category, *[sanitize_identifier(p) for p in after[1:-1]])
                             os.makedirs(dest_dir, exist_ok=True)
                             dest_name = sanitize_filename_keep_ext(after[-1])
                             dest = os.path.join(dest_dir, dest_name)
                         elif first_is_category:
-                            # Single segment that is a known category name — use as subfolder
+
                             dest_dir = os.path.join(resource_pack, "textures", category)
                             os.makedirs(dest_dir, exist_ok=True)
                             dest_name = sanitize_filename_keep_ext(after[0])
                             dest = os.path.join(dest_dir, dest_name)
                         else:
-                            # `first` is not a real category (e.g. "screenshot_2024.png") —
-                            # flatten: just use the last path component as the filename.
+                           
                             dest_dir = os.path.join(resource_pack, "textures")
                             os.makedirs(dest_dir, exist_ok=True)
                             dest_name = sanitize_filename_keep_ext(after[-1])
@@ -2467,7 +2449,7 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                     continue
                 continue
             except Exception as ex:
-                print(f"Asset copy error: {file} -> {ex}")
+                _warn(f"Asset copy error: {file} -> {ex}")
 def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") -> dict:
     try:
         bones = []
@@ -2557,7 +2539,7 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
                 try:
                     root["cubes"].append(element_to_cube(el))
                 except ValueError as e:
-                    print(f"Skipping invalid element: {e}")
+                    _warn(f"Skipping invalid element: {e}")
                     continue
             if root["cubes"]:
                 bones.append(root)
@@ -2917,7 +2899,7 @@ def convert_layerdefinition_to_geckolib(
             }],
         }
     except Exception as e:
-        print(f"Failed to convert LayerDefinition model '{model_name}': {str(e)}")
+        _warn(f"Failed to convert LayerDefinition model '{model_name}': {str(e)}")
         return None
 def try_convert_model_from_jar(jar, file_path: str, resource_pack: str) -> bool:
     try:
@@ -2932,11 +2914,11 @@ def try_convert_model_from_jar(jar, file_path: str, resource_pack: str) -> bool:
         geckolib_data = convert_vanilla_model_to_geckolib(data, model_name)
         validation_issues = validate_geckolib_geometry(geckolib_data, model_name)
         if validation_issues:
-            print(f"Validation warnings for {model_name}:")
+            _warn(f"Validation warnings for {model_name}:")
             for warning in validation_issues[:3]:
-                print(f"       {warning}")
+                _warn(f"       {warning}")
     except Exception as e:
-        print(f"Failed to convert {file_path}: {e}")
+        _warn(f"Failed to convert {file_path}: {e}")
         return False
     out_path = os.path.join(resource_pack, "geometry", f"{model_name}.geo.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -2944,7 +2926,7 @@ def try_convert_model_from_jar(jar, file_path: str, resource_pack: str) -> bool:
     status_msg = f"Converted vanilla model to GeckoLib: {file_path} to {out_path}"
     if 'validation_issues' in locals() and validation_issues:
         status_msg += f"  ({len(validation_issues)} warnings)"
-    print(status_msg)
+
     return True
 def convert_modelbase_to_geckolib(
     java_code: str,
@@ -3183,7 +3165,7 @@ def convert_modelbase_to_geckolib(
             }],
         }
     except Exception as e:
-        print(f"Failed to convert ModelBase model '{model_name}': {str(e)}")
+        _warn(f"Failed to convert ModelBase model '{model_name}': {str(e)}")
         return None
 _FLOAT_RE      = r'[-+]?[0-9]*\.?[0-9]+[FfDdLl]?'
 _FLOAT_EXPR_RE = r'[-+]?(?:\(float\)\s*)?[A-Za-z0-9_.*+\-/()\s]+'
@@ -3270,11 +3252,11 @@ def safe_write_json(out_path: str, data: dict) -> None:
         model_name = os.path.splitext(os.path.basename(out_path))[0]
         warnings = validate_geckolib_geometry(data, model_name)
         if warnings:
-            print(f"Validation warnings for {out_path}:")
+            _warn(f"Validation warnings for {out_path}:")
             for warning in warnings[:5]:
-                print(f"       {warning}")
+                _warn(f"       {warning}")
             if len(warnings) > 5:
-                print(f"       ... and {len(warnings) - 5} more warnings")
+                _warn(f"       ... and {len(warnings) - 5} more warnings")
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
     except Exception as e:
@@ -3368,14 +3350,15 @@ def scan_and_convert_layerdefinition_models(
             status_msg = f"[{method_used}] Converted {cls_name} to {model_stem}.geo.json ({geo_id})"
             if conversion_warnings:
                 status_msg += f"  ({len(conversion_warnings)} warnings)"
-            print(status_msg)
+
             if conversion_warnings:
                 for warning in conversion_warnings[:3]:
-                    print(f"       {warning}")
+                    _warn(f"       {warning}")
         except Exception as e:
-            print(f"Failed to write {out_path}: {e}")
+            _warn(f"Failed to write {out_path}: {e}")
     if converted:
-        print(f"[model-convert] Converted {converted} Java model class(es) to GeckoLib geometry")
+        pass
+
     return result
 _LAYERDEF_GEO_MAP: Dict[str, str] = {}
 def normalise_all_geometry_to_geckolib(resource_pack: str, namespace: str) -> int:
@@ -3425,7 +3408,7 @@ def normalise_all_geometry_to_geckolib(resource_pack: str, namespace: str) -> in
                                 pass
                         seen_stems.add(stem)
                         written += 1
-                        print(f"GeckoLib to rp/geometry/{dest_name}")
+
                     else:
                         seen_stems.add(stem)
                     continue
@@ -3453,13 +3436,14 @@ def normalise_all_geometry_to_geckolib(resource_pack: str, namespace: str) -> in
                                 pass
                         seen_stems.add(stem)
                         written += 1
-                        print(f"Vanilla to GeckoLib to rp/geometry/{dest_name}")
+
                     except Exception as e:
-                        print(f"[geo-sweep] Conversion failed for {src}: {e}")
+                        _warn(f"[geo-sweep] Conversion failed for {src}: {e}")
                     continue
     if written:
-        print(f"Normalized {written} model file(s) to rp/geometry/")
-    # Remove any remaining stale model JSON in rp/models that do not contain Bedrock geometry.
+        pass
+
+  
     for dirpath, _, filenames in os.walk(os.path.join(resource_pack, "models")):
         for fname in filenames:
             lower = fname.lower()
@@ -3471,11 +3455,11 @@ def normalise_all_geometry_to_geckolib(resource_pack: str, namespace: str) -> in
                     data = json.load(fh)
                 if not isinstance(data, dict) or "minecraft:geometry" not in data:
                     os.remove(src)
-                    print(f"Removed stale rp/models file: {src}")
+
             except Exception:
                 try:
                     os.remove(src)
-                    print(f"Removed invalid rp/models file: {src}")
+
                 except Exception:
                     pass
     return written
@@ -3489,7 +3473,7 @@ def copy_geckolib_animations_from_jar(jar_path: str, resource_pack: str):
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with jar.open(file) as src_file, open(dest, "wb") as out_file:
                     shutil.copyfileobj(src_file, out_file)
-                print(f"Copied animation file from JAR: {file} -> {dest}")
+
 def rp_texture_exists(texture_path_without_ext: str) -> bool:
     variants = [
         os.path.join(RP_FOLDER, "textures", texture_path_without_ext + ".png"),
@@ -3569,7 +3553,7 @@ def generate_texture_registry(pack_name: str):
     }
     terrain_path = os.path.join(RP_FOLDER, "textures", "terrain_texture.json")
     safe_write_json(terrain_path, terrain_registry)
-    print("Generated texture atlases (item_texture.json and terrain_texture.json).")
+
 def normalize_geometry_file_identifiers():
     geom_dir = os.path.join(RP_FOLDER, "geometry")
     if not os.path.isdir(geom_dir):
@@ -3596,7 +3580,7 @@ def normalize_geometry_file_identifiers():
                 txt2 = txt.replace(m.group(0), f'"identifier": "{newidf}"')
                 with open(path, "w", encoding="utf-8") as fh2:
                     fh2.write(txt2)
-                print(f"[geom-normalize] Rewrote identifier in {path}: {orig} -> {newidf}")
+
             except Exception:
                 continue
             continue
@@ -3624,7 +3608,7 @@ def normalize_geometry_file_identifiers():
         changed = set_identifiers(data)
         if changed:
             safe_write_json(path, data)
-            print(f"[geom-normalize] Normalized identifiers in {path}")
+
 def fix_animation_format_versions():
     for folder in [os.path.join(RP_FOLDER, "animations"), os.path.join(BP_FOLDER, "animations")]:
         if not os.path.isdir(folder):
@@ -3640,7 +3624,7 @@ def fix_animation_format_versions():
                     data["format_version"] = "1.10.0"
                     with open(fpath, "w", encoding="utf-8") as f:
                         json.dump(data, f, indent=2)
-                    print(f"[anim] Fixed format_version 1.8.0->1.10.0 in {fname}")
+
             except Exception:
                 pass
 def sanitize_animation_keys_in_files():
@@ -3675,7 +3659,7 @@ def sanitize_animation_keys_in_files():
         if changed:
             data["animations"] = new_anims
             safe_write_json(path, data)
-            print(f"[anim-normalize] Normalized animation keys in {path}")
+
 def canonicalize_animation_id(raw: str, namespace: Optional[str] = None, entity_name: Optional[str] = None) -> str:
     MOTION_KEYWORDS = {
         "idle", "stand", "pose", "float",
@@ -3776,8 +3760,7 @@ def build_rp_asset_index():
         os.makedirs(os.path.dirname(flipbook_path), exist_ok=True)
         with open(flipbook_path, "w", encoding="utf-8") as f:
             json.dump(_RP_ASSET_INDEX["flipbook_textures"], f, indent=2)
-        print(f"[flipbook] Wrote flipbook_textures.json with {len(_RP_ASSET_INDEX['flipbook_textures'])} animated texture(s)")
-    print(f"[index] Indexed {len(textures)} texture(s) and {len(geometry)} geometry model(s)")
+
 def _camel_tokens(s: str) -> set:
     s = re.sub(r'([A-Z])', r'_\1', s).lower().strip("_")
     return {t for t in re.split(r'[_\s\-]+', s) if len(t) > 1}
@@ -4040,7 +4023,7 @@ def build_renderer_entity_map():
         _put(camel,    renderer_cls, model_cls)
         _put(etype_key, renderer_cls, model_cls)
     found = sum(1 for v in _RENDERER_MAP.values() if v.get("renderer") or v.get("model"))
-    print(f"[renderer-map] Mapped {found} entity→renderer/model relationship(s) from {len(_ALL_JAVA_FILES)} source files")
+
 def build_geckolib_mappings(java_root="."):
     java_files = read_all_java_files(java_root)
     class_to_path: Dict[str, str] = {}
@@ -4509,8 +4492,7 @@ def build_goal_inheritance_map(java_files: Dict[str, str]) -> None:
     _ENTITY_SOURCE_MAP = entity_src
     _GOAL_MAP_BUILT = True
     custom_count = sum(1 for c in raw if c not in VANILLA_GOALS)
-    print(f"[goal-map] Built inheritance map: {len(raw)} entries "
-          f"({custom_count} custom, {len(raw) - custom_count} vanilla)")
+
 def resolve_custom_goal(custom_class: str, visited: Optional[Set[str]] = None) -> Optional[str]:
     if visited is None:
         visited = set()
@@ -4519,7 +4501,7 @@ def resolve_custom_goal(custom_class: str, visited: Optional[Set[str]] = None) -
     visited.add(custom_class)
     if custom_class in GOAL_NAME_ALIASES:
         resolved = GOAL_NAME_ALIASES[custom_class]
-        print(f"{custom_class} -> {resolved} (alias)")
+
         return resolved
     if custom_class in VANILLA_GOALS:
         return custom_class
@@ -4527,9 +4509,9 @@ def resolve_custom_goal(custom_class: str, visited: Optional[Set[str]] = None) -
     if not parent:
         return None
     if parent in VANILLA_GOALS:
-        print(f"{custom_class} -> {parent} (vanilla)")
+
         return parent
-    print(f"{custom_class} -> {parent} (custom, descending...)")
+
     return resolve_custom_goal(parent, visited)
 def _collect_super_goals(entity_class: str,
                          java_files: Dict[str, str],
@@ -4645,10 +4627,12 @@ def extract_ai_goals_from_java(java_code: str,
             resolved = resolve_custom_goal(custom_cls)
             if resolved:
                 if resolved not in ai_goals:
-                    print(f"Custom goal '{custom_cls}' resolved to '{resolved}'")
+                    pass
+
                 _add(resolved)
             else:
-                print(f"Custom goal '{custom_cls}' could not be resolved to a vanilla goal")
+                pass
+
         calls_super_register = any(
             inv.member == 'registerGoals'
             for _, inv in ast._tree.filter(javalang.tree.MethodInvocation)
@@ -4665,8 +4649,8 @@ def extract_ai_goals_from_java(java_code: str,
                 for g in inherited:
                     _add(g)
                 if inherited:
-                    print(f"Inherited {len(inherited)} goal(s) via "
-                          f"super.registerGoals() for {entity_cls}: {inherited}")
+                    pass
+
     else:
         for goal_name in VANILLA_GOALS:
             if re.search(rf'\bnew\s+{re.escape(goal_name)}\s*[(<]', java_code):
@@ -4700,10 +4684,12 @@ def extract_ai_goals_from_java(java_code: str,
             resolved = resolve_custom_goal(custom_cls)
             if resolved:
                 if resolved not in ai_goals:
-                    print(f"Custom goal '{custom_cls}' resolved to '{resolved}'")
+                    pass
+
                 _add(resolved)
             else:
-                print(f"Custom goal '{custom_cls}' could not be resolved to a vanilla goal")
+                pass
+
         if re.search(r'\bsuper\s*\.\s*registerGoals\s*\(\s*\)', java_code):
             cls_m = re.search(r'\bclass\s+([A-Za-z0-9_]+)', java_code)
             if cls_m:
@@ -4712,8 +4698,8 @@ def extract_ai_goals_from_java(java_code: str,
                 for g in inherited:
                     _add(g)
                 if inherited:
-                    print(f"Inherited {len(inherited)} goal(s) via "
-                          f"super.registerGoals() for {entity_cls}: {inherited}")
+                    pass
+
     LEGACY_EXTEND_MAP = {
         "MeleeAttackGoal", "RangedAttackGoal",
         "NearestAttackableTargetGoal", "HurtByTargetGoal",
@@ -4853,7 +4839,7 @@ def write_render_controller(entity_basename: str, namespace: str, geometry_ident
         controller["render_controllers"][controller_id]["uv_anim"] = uv_anim
     out_path = os.path.join(RP_FOLDER, "render_controllers", f"{entity_basename_clean}.render_controllers.json")
     safe_write_json(out_path, controller)
-    print(f"Wrote render controller: {out_path}")
+
     return controller_id
 def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str, geometry_identifier: str, animation_key: Optional[str], controller_id: str):
     entity_basename_clean = sanitize_identifier(entity_basename)
@@ -4877,7 +4863,7 @@ def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str,
     }
     pending_sounds = _ENTITY_SOUND_EVENTS.get(f"{namespace_clean}:{entity_basename_clean}")
     if pending_sounds:
-        # Only animation-driven slots go in sound_effects; lifecycle slots are in sounds.json.
+      
         _ANIM_SLOTS = {"attack"}
         anim_fx = {k: v for k, v in pending_sounds.get("events", {}).items() if k in _ANIM_SLOTS}
         if anim_fx:
@@ -4888,7 +4874,7 @@ def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str,
     }
     out_path = os.path.join(RP_FOLDER, "entity", f"{entity_basename_clean}.entity.json")
     safe_write_json(out_path, client_entity)
-    print(f"[rp_entity] Wrote {out_path}")
+
 def extract_block_properties_from_java(java_code: str):
     props = {
         "destroy_time": None,
@@ -4965,7 +4951,7 @@ def convert_java_block_to_bedrock(java_path: str, namespace: str):
         with open(java_path, 'r', encoding='utf-8', errors='ignore') as f:
             java_code = f.read()
     except Exception as e:
-        print(f" Failed to read block java {java_path}: {e}")
+        _warn(f" Failed to read block java {java_path}: {e}")
         return
     block_basename = os.path.splitext(os.path.basename(java_path))[0]
     block_id = f"{sanitize_identifier(namespace)}:{sanitize_identifier(block_basename)}"
@@ -4996,7 +4982,7 @@ def convert_java_block_to_bedrock(java_path: str, namespace: str):
     comps["_converter_metadata"] = {"source_java_file": os.path.basename(java_path), "parsed_props": props, "sound_profile": sound_profile}
     out_path = os.path.join(BP_FOLDER, "blocks", f"{sanitize_identifier(block_basename)}.json")
     safe_write_json(out_path, block_json)
-    print(f"Converted block {java_path} -> {out_path}")
+
 def extract_item_properties_from_java(java_code: str):
     props = {
         "max_stack_size": None,
@@ -5086,7 +5072,7 @@ def convert_java_item_to_bedrock(java_path: str, namespace: str):
         with open(java_path, 'r', encoding='utf-8', errors='ignore') as f:
             java_code = f.read()
     except Exception as e:
-        print(f" Failed to read item java {java_path}: {e}")
+        _warn(f" Failed to read item java {java_path}: {e}")
         return
     item_basename = os.path.splitext(os.path.basename(java_path))[0]
     item_id = f"{sanitize_identifier(namespace)}:{sanitize_identifier(item_basename)}"
@@ -5108,7 +5094,7 @@ def convert_java_item_to_bedrock(java_path: str, namespace: str):
     comps["_converter_metadata"] = {"source_java_file": os.path.basename(java_path), "parsed_props": props, "sound_profile": sound_profile}
     out_bp = os.path.join(BP_FOLDER, "items", f"{sanitize_identifier(item_basename)}.json")
     safe_write_json(out_bp, bp_item)
-    print(f"Converted item (BP) {java_path} -> {out_bp}")
+
     texture_ref = resolve_texture_reference(namespace, props.get("texture_hint"), "items", fallback_name=sanitize_identifier(item_basename))
     rp_item = {
         "format_version": BP_ITEM_FORMAT_VERSION,
@@ -5119,7 +5105,7 @@ def convert_java_item_to_bedrock(java_path: str, namespace: str):
     }
     out_rp = os.path.join(RP_FOLDER, "items", f"{sanitize_identifier(item_basename)}.item.json")
     safe_write_json(out_rp, rp_item)
-    print(f"Converted item (RP) {java_path} -> {out_rp}")
+
 NON_ENTITY_KEYWORDS = [
     "renderer", "render", "model", "procedure", "tickupdate", "factory",
     "packet", "handler", "provider", "command", "ui", "screen", "container",
@@ -5467,11 +5453,13 @@ def find_entity_assets_aggressively(
                 raw = extract_entity_texture_hint(code, entity_basename)
                 tex = _tex_ref_from_hint(raw)
                 if tex:
-                    print(f"[assets] Texture found in {label}: {tex}")
+                    pass
+
             if not geom:
                 geom = _geom_from_code(code)
                 if geom:
-                    print(f"[assets] Geometry found in {label}: {geom}")
+                    pass
+
             if tex and geom:
                 break
         return tex, geom
@@ -5515,18 +5503,20 @@ def find_entity_assets_aggressively(
     if not tex_ref:
         tex_ref = _best_texture_on_disk()
         if tex_ref:
-            print(f"[assets] Texture fuzzy-matched for '{entity_basename}': {tex_ref}")
+            pass
+
     if not geom_ident:
         geom_ident = _best_geometry_on_disk()
         if geom_ident:
-            print(f"[assets] Geometry fuzzy-matched for '{entity_basename}': {geom_ident}")
+            pass
+
     return tex_ref, geom_ident
 def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: dict, geom_file_map: dict, geom_ns_map: dict, anim_key_map: dict, stats: dict):
     try:
         with open(java_path, 'r', encoding='utf-8', errors='ignore') as f:
             java_code = f.read()
     except Exception as e:
-        print(f" Failed to read {java_path}: {e}")
+        _warn(f" Failed to read {java_path}: {e}")
         stats["errors"].append(f"read:{java_path}:{e}")
         return
     if not is_likely_entity(java_code, java_path) or _should_skip_entity_artifact(java_code, java_path, extract_class_name(java_code)):
@@ -5909,12 +5899,13 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
     anim_json_path_rp = os.path.join(RP_FOLDER, "animations", f"{entity_basename}.animation.json")
     if not os.path.exists(anim_json_path_rp):
         safe_write_json(anim_json_path_rp, anim_json)
-        print(f"[anim] Wrote stub RP animation JSON: {anim_json_path_rp}")
+
     else:
-        print(f"[anim] Skipped stub write — GeckoLib animation already present: {anim_json_path_rp}")
+        pass
+
     entity_json_path = os.path.join(BP_FOLDER, "entities", f"{entity_basename}.json")
     safe_write_json(entity_json_path, bedrock_entity)
-    print(f"Converted (BP entity) {java_path} -> {entity_json_path}")
+
     stats["converted_entities_bp"].append(entity_json_path)
     java_geom_tuple = find_model_geometry_in_code(java_code)
     java_geom_identifier: Optional[str] = None
@@ -5926,13 +5917,13 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
         java_key2 = (namespace.lower(), java_name_clean)
         if java_key in geom_ns_map:
             java_geom_identifier = geom_ns_map[java_key]
-            print(f"[java-ref] Found Java-referenced geometry for {entity_basename}: {java_geom_identifier}")
+
         elif java_key2 in geom_ns_map:
             java_geom_identifier = geom_ns_map[java_key2]
-            print(f"[java-ref] Found Java-referenced geometry for {entity_basename}: {java_geom_identifier}")
+
         elif java_name_clean in geom_file_map:
             java_geom_identifier = geom_file_map[java_name_clean]
-            print(f"[java-ref] Found Java-referenced geometry for {entity_basename}: {java_geom_identifier}")
+
     entity_cls_name = extract_class_name(java_code)
     aggressive_tex, aggressive_geom = find_entity_assets_aggressively(
         java_code, entity_basename, namespace, entity_cls=entity_cls_name
@@ -6006,7 +5997,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
                 geom_identifier = aggressive_geom
             elif is_invalid:
                 skip_reason = "spawn_egg" if "spawn_egg" in aggressive_lower else "item/simple geometry"
-                print(f"[assets] Skipping {skip_reason} for '{entity_basename}', continuing search...")
+
                 pass
     if aggressive_tex:
         texture_ref = aggressive_tex
@@ -6024,7 +6015,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
                     model_stem = re.sub(r'(?i)Model$', '', model_cls).lower()
                     if ent_stem and model_stem and ent_stem == model_stem:
                         geom_identifier = geo_id
-                        print(f"[layerdef-link] {entity_cls} -> {model_cls} -> {geo_id}")
+
                         break
                 if not geom_identifier:
                     geo_data = convert_layerdefinition_to_geckolib(
@@ -6035,9 +6026,9 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
                         try:
                             safe_write_json(out_path, geo_data)
                             geom_identifier = geo_data['minecraft:geometry'][0]['description']['identifier']
-                            print(f"[layerdef-inline] Converted inline LayerDefinition for {entity_basename}")
+
                         except Exception as _le:
-                            print(f"[layerdef-inline] Write failed: {_le}")
+                            _warn(f"[layerdef-inline] Write failed: {_le}")
         if not geom_identifier:
             geo_data = convert_layerdefinition_to_geckolib(
                 java_code, entity_basename, namespace, entity_name=entity_name
@@ -6047,14 +6038,13 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
                 try:
                     safe_write_json(out_path, geo_data)
                     geom_identifier = geo_data['minecraft:geometry'][0]['description']['identifier']
-                    print(f"[layerdef-inline] Converted inline LayerDefinition for {entity_basename}")
+
                 except Exception as _le:
-                    print(f"[layerdef-inline] Write failed: {_le}")
+                    _warn(f"[layerdef-inline] Write failed: {_le}")
     if not geom_identifier:
         geom_identifier = f"geometry.{namespace}.{entity_name}"
         stats["missing_geometry"].append((java_path, entity_basename))
-        print(f"[rp-fallback] No geometry found for {entity_basename} — using placeholder '{geom_identifier}'. "
-              f"Provide a matching .geo.json to fix rendering.")
+
     chosen_animation_key = None
     if primary_animation_key:
         candidate = canonicalize_animation_id(primary_animation_key, namespace, entity_name)
@@ -6101,10 +6091,10 @@ def choose_icon_size_for(width: int, height: int) -> int:
     return VALID_ICON_SIZES[0]
 def ensure_and_fix_pack_icon(src_path: str, dest_path: str):
     if not os.path.exists(src_path):
-        print(f"[icon] source icon not found: {src_path}")
+        _warn(f"[icon] source icon not found: {src_path}")
         return False
     if not PIL_AVAILABLE:
-        print(" Pillow (PIL) not installed — pack_icon.png will be copied unmodified. To auto-fix sizing run: pip install pillow")
+
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         shutil.copy(src_path, dest_path)
         return False
@@ -6124,10 +6114,10 @@ def ensure_and_fix_pack_icon(src_path: str, dest_path: str):
                 im_resized = im_cropped
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             im_resized.save(dest_path, format="PNG")
-            print(f"[icon] Wrote pack_icon.png with size {target_size}x{target_size} to {dest_path}")
+
             return True
     except Exception as e:
-        print(f"[icon] Failed to process icon (PIL): {e}. Copying without transform.")
+        _warn(f"[icon] Failed to process icon (PIL): {e}. Copying without transform.")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         shutil.copy(src_path, dest_path)
         return False
@@ -6204,9 +6194,10 @@ def generate_sounds_registry(mod_name: str):
             "format_version": "1.14.0",
             "sound_definitions": final_defs
         })
-        print(f"[sounds] Wrote sound_definitions.json: {len(final_defs)} entries, {collisions} collision(s) resolved")
+
     else:
-        print("[sounds] No sound definitions collected; skipping sound_definitions.json")
+        pass
+
     if _ENTITY_SOUND_EVENTS:
         entities_block: dict = {}
         for entity_id, entry in _ENTITY_SOUND_EVENTS.items():
@@ -6224,9 +6215,10 @@ def generate_sounds_registry(mod_name: str):
         sounds_json = {"entity_sounds": {"entities": entities_block}}
         out_path = os.path.join(RP_FOLDER, "sounds.json")
         safe_write_json(out_path, sounds_json)
-        print(f"[sounds] Wrote sounds.json: {len(entities_block)} entity sound entr{'y' if len(entities_block)==1 else 'ies'}")
+
     else:
-        print("[sounds] No entity sound events detected; skipping sounds.json")
+        pass
+
 JAVA_MOB_EFFECT_MAP = {
     "MOVEMENT_SPEED": "speed", "MOVEMENT_SLOWDOWN": "slowness",
     "DIG_SPEED": "haste", "DIG_SLOWDOWN": "mining_fatigue",
@@ -6418,8 +6410,7 @@ def apply_entity_sounds(bedrock_entity: dict, sounds: dict, namespace: str,
             "pitch": [0.8, 1.2],
             "volume": 1.0
         }
-        # Only put non-lifecycle sounds in the RP sound_effects block (used by animations).
-        # Lifecycle slots (ambient/hurt/death/step/swim/splash) are driven by sounds.json.
+       
         _ANIM_ONLY_SLOTS = {"attack"}
         anim_sounds = {k: v for k, v in events_block.items() if k in _ANIM_ONLY_SLOTS}
         _update_rp_entity_sound_effects(entity_id, anim_sounds)
@@ -6442,7 +6433,7 @@ def apply_entity_sounds(bedrock_entity: dict, sounds: dict, namespace: str,
                 "sounds": [{"name": file_path}],
                 "__stub__": True
             }
-            print(f"  [sounds] Stub entry created: {sound_key} -> {file_path} (category: {category})")
+
 def _update_rp_entity_sound_effects(entity_id: str, sounds: dict) -> None:
     if not entity_id or not sounds:
         return
@@ -6463,7 +6454,6 @@ def _update_rp_entity_sound_effects(entity_id: str, sounds: dict) -> None:
             json.dump(data, fh, indent=2)
     except Exception:
         pass
-
 
 def _guess_block_sound_profile(java_code: str, namespace: str, block_id: str) -> dict:
     code = java_code or ''
@@ -6492,7 +6482,6 @@ def _guess_block_sound_profile(java_code: str, namespace: str, block_id: str) ->
         sounds[slot] = key
     return sounds
 
-
 def _guess_item_sound_profile(java_code: str, namespace: str, item_id: str) -> dict:
     code = java_code or ''
     sounds = {}
@@ -6512,7 +6501,6 @@ def _guess_item_sound_profile(java_code: str, namespace: str, item_id: str) -> d
     if not sounds and re.search(r'FoodProperties|\.food\s*\(|nutrition|saturationMod', code, re.I):
         sounds['consume'] = sanitize_sound_key(f'{namespace}.{item_id.split(":")[-1]}.consume')
     return sounds
-
 
 def generate_sound_playback_script(namespace: str) -> None:
     entity_entries = []
@@ -6599,7 +6587,7 @@ def generate_sound_playback_script(namespace: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(lines))
-    print(f'[sounds] Wrote {out_path}')
+
 JAVA_SLOT_TO_BEDROCK = {
     "HEAD": "slot.armor.head",
     "CHEST": "slot.armor.chest",
@@ -6802,7 +6790,7 @@ def generate_spawn_rules(entity_id: str, java_code: str, namespace: str):
         }
     }
     safe_write_json(out_path, doc)
-    print(f"[spawn_rules] Wrote {out_path}")
+
 JAVA_LOOT_ITEM_MAP = {
     "minecraft:bone": "minecraft:bone",
     "minecraft:rotten_flesh": "minecraft:rotten_flesh",
@@ -6901,8 +6889,8 @@ def process_loot_tables_from_jar(jar_path: str, namespace: str):
                 safe_write_json(out_path, bedrock)
                 count += 1
             except Exception as e:
-                print(f"[loot] Failed to convert {name}: {e}")
-    print(f"[loot] Converted {count} loot tables -> {out_base}")
+                _warn(f"[loot] Failed to convert {name}: {e}")
+
 def generate_entity_script(java_code: str, entity_name: str, entity_id: str, namespace: str):
     symbol_table = JavaSymbolTable()
     symbol_table.scan_java_file(java_code)
@@ -6970,7 +6958,6 @@ def generate_entity_script(java_code: str, entity_name: str, entity_id: str, nam
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(script_content))
 
-    print(f"[script] Generated entity script: {out_path}")
 def generate_trading_table(entity_id: str, java_code: str, namespace: str):
     safe_name = sanitize_identifier(entity_id.split(":")[-1])
     out_path = os.path.join(BP_FOLDER, "trading", f"{safe_name}.json")
@@ -6999,7 +6986,7 @@ def generate_trading_table(entity_id: str, java_code: str, namespace: str):
         })
     doc = {"tiers": tiers}
     safe_write_json(out_path, doc)
-    print(f"[trading] Wrote {out_path}")
+
 JAVA_TAG_TO_BEDROCK_GROUP = {
     "forge:ores": "ore",
     "forge:ingots": "ingot",
@@ -7100,7 +7087,7 @@ def extract_item_tags_from_jar(jar_path: str, namespace: str):
                         if item_id not in groups[group]:
                             groups[group].append(item_id)
             except Exception as e:
-                print(f"[tags] Failed to parse {name}: {e}")
+                _warn(f"[tags] Failed to parse {name}: {e}")
     for group_name, items in groups.items():
         if items:
             catalog["minecraft:item_catalog"]["groups"].append({
@@ -7116,7 +7103,7 @@ def run_class_decompiler(jar_file, output_dir):
     lib_jar = os.path.join(script_dir, "tools", "ClassDecompiler.jar")
 
     if not os.path.exists(lib_jar):
-        print(f"Error: ClassDecompiler.jar not found at {lib_jar}")
+        _warn(f"Error: ClassDecompiler.jar not found at {lib_jar}")
         return None
 
     try:
@@ -7129,7 +7116,7 @@ def run_class_decompiler(jar_file, output_dir):
                 z.extract(internal_path, script_dir)
                 extracted_engine = os.path.join(script_dir, internal_path)
             else:
-                print("Vineflower jar not found in ClassDecompiler.jar")
+                _warn("Vineflower jar not found in ClassDecompiler.jar")
                 return None
 
         subprocess.run(
@@ -7143,7 +7130,7 @@ def run_class_decompiler(jar_file, output_dir):
         return extracted_engine
 
     except Exception as e:
-        print(f"Decompilation failure: {e}")
+        _warn(f"Decompilation failure: {e}")
         return None
 
 def main():
@@ -7153,7 +7140,7 @@ def main():
     )
 
     if not target_jar:
-        print("No target jar file found.")
+        _warn("No target jar file found.")
         return
 
     modmorpher_input_folder = f"src_{os.path.splitext(target_jar)[0]}"
@@ -7161,17 +7148,14 @@ def main():
     extracted_engine = run_class_decompiler(target_jar, modmorpher_input_folder)
 
     if extracted_engine:
-        print(f"Decompilation successful. Preparing environment for ModMorpher...")
 
         if os.path.exists(extracted_engine):
             os.remove(extracted_engine)
 
-        print("Running modmorpher pipeline...")
         run_pipeline()
 
-        print("Pipeline finished.")
     else:
-        print("Pipeline aborted due to decompiler errors.")
+        _warn("Pipeline aborted due to decompiler errors.")
 def find_best_texture_match(safe_name: str, subfolder: str) -> str:
     tex_dir = os.path.join(RP_FOLDER, "textures", subfolder)
     if not os.path.isdir(tex_dir):
@@ -7409,14 +7393,14 @@ def generate_block_script(java_code: str, safe_name: str, block_id: str, namespa
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(script_lines))
-    print(f"[block-script] Wrote {out_path}")
+
     return True
 
 def _finish_block_json(doc: dict, safe_name: str) -> None:
     out_path = os.path.join(BP_FOLDER, "blocks", f"{safe_name}.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     safe_write_json(out_path, doc)
-    print(f"[block] Wrote {out_path}")
+
 _EFFECT_NAME_MAP = {
     "SPEED": "speed", "SLOWNESS": "slowness", "HASTE": "haste",
     "MINING_FATIGUE": "mining_fatigue", "STRENGTH": "strength",
@@ -7774,7 +7758,7 @@ def generate_entity_script(java_code: str, safe_name: str, entity_id: str, names
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(all_lines))
-    print(f"[entity-script] Wrote {out_path}")
+
     return True
 
 _INHERITANCE_GRAPH: Dict[str, str] = {}
@@ -7933,7 +7917,6 @@ def scan_mixins(java_files: Dict[str, str], namespace: str) -> None:
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(script_lines))
-            print(f"[mixin] Wrote {out_path}")
 
 _CAP_FIELD_TYPE_MAP = {
     "int": "number",
@@ -8086,7 +8069,6 @@ def scan_capabilities(java_files: Dict[str, str], namespace: str) -> None:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write("\n".join(script_lines))
-        print(f"[capability] Wrote {out_path}")
 
 _PACKET_HANDLER_PATTERNS = [
     r'SimpleChannel\s*\.\s*(?:newSimpleChannel|create)\s*\(\s*(?:new\s+)?ResourceLocation\s*\(\s*["\']([^"\']+)["\']',
@@ -8225,7 +8207,6 @@ def scan_networking(java_files: Dict[str, str], namespace: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(all_lines))
-    print(f"[network] Wrote {out_path} ({len(packet_classes)} packet class(es))")
 
 _CLIENT_RENDERER_BASES = {
     "EntityRenderer", "MobRenderer", "LivingEntityRenderer",
@@ -8273,8 +8254,7 @@ def scan_client_classes(java_files: Dict[str, str]) -> None:
 def write_porting_notes() -> None:
     if not _PORTING_NOTES:
         return
-    # Write next to the .mcaddon output, NOT inside OUTPUT_DIR / the pack folder.
-    # The validator flags any .txt inside the pack as extraneous content (PRJINT101).
+   
     out_path = "PORTING_NOTES.txt"
     categories = {"mixin": [], "capability": [], "network": [], "client-only": [], "other": []}
     for note in _PORTING_NOTES:
@@ -8311,7 +8291,6 @@ def write_porting_notes() -> None:
         lines.append("")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    print(f"[notes] Wrote {out_path} ({len(_PORTING_NOTES)} item(s))")
 
 _FORGE_EVENT_MAP = {
     "PlayerInteractEvent.EntityInteract":  ("afterEvents", "playerInteractWithEntity"),
@@ -8650,7 +8629,7 @@ def generate_scripting_stub(java_code: str, safe_name: str, item_id: str, namesp
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(script_lines))
-    print(f"[script] Wrote {out_path}")
+
     return True
 
 def convert_java_item_full(java_code: str, java_path: str, namespace: str):
@@ -8743,7 +8722,7 @@ def convert_java_item_full(java_code: str, java_path: str, namespace: str):
     out_path = os.path.join(BP_FOLDER, "items", f"{safe_name}.json")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     safe_write_json(out_path, doc)
-    print(f"[item] Wrote {out_path}")
+
 JAVA_PARTICLE_MAP = {
     "explosion": "minecraft:explosion_particle",
     "large_explosion": "minecraft:explosion_particle",
@@ -8908,7 +8887,7 @@ def extract_and_generate_particles(java_code: str, entity_id: str, namespace: st
         }
         out_path = os.path.join(out_dir, f"{safe_name}_{java_name}.json")
         safe_write_json(out_path, doc)
-    print(f"[particles] Wrote {len(found)} particle stubs for {entity_id}")
+
 def convert_lang_files():
     lang_dir = os.path.join(RP_FOLDER, "lang")
     if not os.path.isdir(lang_dir):
@@ -8933,9 +8912,9 @@ def convert_lang_files():
                 with open(out_path, "w", encoding="utf-8") as f:
                     f.write("\n".join(lines))
                 os.remove(fpath)
-                print(f"[lang] Converted {fname} -> {lang_name}.lang ({len(lines)} entries)")
+
             except Exception as e:
-                print(f"[lang] Failed to convert {fname}: {e}")
+                _warn(f"[lang] Failed to convert {fname}: {e}")
 JAVA_RECIPE_ITEM_MAP = {
     "minecraft:crafting_table": "minecraft:crafting_table",
     "minecraft:furnace": "minecraft:furnace",
@@ -9032,8 +9011,8 @@ def process_recipes_from_jar(jar_path: str, namespace: str):
                 safe_write_json(out_path, bedrock)
                 count += 1
             except Exception as e:
-                print(f"[recipe] Failed to convert {name}: {e}")
-    print(f"[recipe] Converted {count} recipes -> {out_base}")
+                _warn(f"[recipe] Failed to convert {name}: {e}")
+
 def _categorise_animations(animations: set) -> dict:
     buckets = {
         "idle":    [], "walk":   [], "run":    [], "attack": [],
@@ -9095,7 +9074,7 @@ def generate_animation_controller(entity_id: str, animations: set, namespace: st
     spawn_anim  = pick("spawn")
     if not idle_anim:
         idle_anim = sorted(animations)[0]
-    # Keep all discovered animations alive in the controller, even if they do not match a known motion bucket.
+  
     states = {}
     if has_spawn:
         states["spawn"] = {
@@ -9209,7 +9188,7 @@ def generate_animation_controller(entity_id: str, animations: set, namespace: st
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{safe_name}.animation_controllers.json")
     safe_write_json(out_path, doc)
-    print(f"[anim_ctrl] Wrote {out_path} ({len(states)} states)")
+
     return controller_id
 def patch_rp_entity_with_controller(entity_basename: str, animations: set,
                                      controller_id: Optional[str], namespace: str):
@@ -9260,11 +9239,9 @@ def patch_rp_entity_with_controller(entity_basename: str, animations: set,
     try:
         with open(rp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        print(f"[anim_wire] Patched {os.path.basename(rp_path)}: "
-              f"{len(anim_map)} anim(s)"
-              f"{', controller wired as ' + repr('ctrl') if controller_id else ''}")
+
     except Exception as e:
-        print(f"[anim_wire] Failed to patch {rp_path}: {e}")
+        _warn(f"[anim_wire] Failed to patch {rp_path}: {e}")
 def prune_orphaned_assets() -> List[str]:
     """Walk the generated BP/RP and remove files that have no live references.
 
@@ -9283,13 +9260,10 @@ def prune_orphaned_assets() -> List[str]:
         removed.append(f"[prune-error] {traceback.format_exc()}")
     return removed
 
-
 def _prune_orphaned_assets_impl(removed: List[str]) -> None:
     """Implementation detail — called by prune_orphaned_assets."""
 
-    # ------------------------------------------------------------------ #
-    # Helper: collect all string values (recursively) from a parsed JSON. #
-    # ------------------------------------------------------------------ #
+  
     def _all_strings(obj) -> List[str]:
         if isinstance(obj, str):
             return [obj]
@@ -9326,17 +9300,11 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
         except OSError:
             pass
 
-    # ------------------------------------------------------------------ #
-    # Pass 1 — collect referenced identifiers from all JSON files.        #
-    # ------------------------------------------------------------------ #
+   
 
-    # Textures referenced by name (relative path without extension).
     referenced_textures: set = set()
-    # Geometry identifiers referenced (e.g. "geometry.mymod.spider").
     referenced_geo_ids: set = set()
-    # Geometry *file* stems referenced (e.g. "spider", "spider.geo").
     referenced_geo_stems: set = set()
-    # All string values from every JSON — broad net for textures.
     all_json_strings: set = set()
 
     json_dirs = [
@@ -9347,7 +9315,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
         os.path.join(BP_FOLDER, "blocks"),
         os.path.join(BP_FOLDER, "items"),
         os.path.join(BP_FOLDER, "entities"),
-        os.path.join(RP_FOLDER, "textures"),   # item_texture.json / terrain_texture.json
+        os.path.join(RP_FOLDER, "textures"),
     ]
     for jdir in json_dirs:
         if not os.path.isdir(jdir):
@@ -9361,22 +9329,18 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                     continue
                 for s in _all_strings(data):
                     all_json_strings.add(s)
-                    # Texture references: "textures/entity/spider" or bare "entity/spider"
                     if s.startswith("textures/") or "/" in s:
                         referenced_textures.add(s)
                         referenced_textures.add(s.lstrip("textures/"))
                         referenced_textures.add(os.path.splitext(s)[0])
-                    # Geometry references: "geometry.mymod.spider"
                     if s.startswith("geometry."):
                         referenced_geo_ids.add(s)
                         tail = s[len("geometry."):]
                         referenced_geo_stems.add(tail)
                         referenced_geo_stems.add(tail.split(".")[-1])
 
-    # Also collect geometry identifiers declared inside .geo.json files so we
-    # can cross-reference them properly.
-    geo_id_to_file: Dict[str, str] = {}   # "geometry.xxx" -> absolute path
-    geo_stem_to_file: Dict[str, str] = {} # "xxx" -> absolute path
+    geo_id_to_file: Dict[str, str] = {}
+    geo_stem_to_file: Dict[str, str] = {}
     for geo_root in [os.path.join(RP_FOLDER, "geometry"), os.path.join(RP_FOLDER, "models")]:
         if not os.path.isdir(geo_root):
             continue
@@ -9399,12 +9363,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
             stem = os.path.splitext(fname)[0]
             geo_stem_to_file.setdefault(stem, fpath)
 
-    # ------------------------------------------------------------------ #
-    # ------------------------------------------------------------------ #
-    # Pass 2a — remove RP entity client files missing geometry (UNLINK332)#
-    # or missing both texture and geometry.  Must run BEFORE texture      #
-    # pruning so dead entity JSONs don't keep their textures alive.       #
-    # ------------------------------------------------------------------ #
+
     tex_root = os.path.join(RP_FOLDER, "textures")
 
     tex_on_disk: set = set()
@@ -9464,9 +9423,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                     f"[warn] {_rel(fpath)}: missing texture(s) {tex_refs} — kept but will render incorrectly"
                 )
 
-    # ------------------------------------------------------------------ #
-    # Pass 2b — remove orphaned geometry files.                           #
-    # ------------------------------------------------------------------ #
+
     for geo_root in [os.path.join(RP_FOLDER, "geometry"), os.path.join(RP_FOLDER, "models")]:
         if not os.path.isdir(geo_root):
             continue
@@ -9484,14 +9441,6 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
             )
             if not matched:
                 _remove(fpath, "Orphaned geometry file (not referenced by any entity JSON)")
-
-    # ------------------------------------------------------------------ #
-    # Pass 2c — remove orphaned textures.                                 #
-    #                                                                     #
-    # Rebuild the texture reference set from whatever entity/RC JSON      #
-    # files SURVIVE on disk now (after Pass 2a deleted the bad ones).     #
-    # Use exact path matching only — no broad substring checks.           #
-    # ------------------------------------------------------------------ #
     SAFE_TO_PRUNE = {"entity", "mob_effect", "screens", "environment", "colormap", "misc"}
 
     live_tex_refs: set = set()
@@ -9547,9 +9496,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                                 f"Orphaned texture in textures/{entry}/ (not referenced by any surviving JSON)",
                             )
 
-    # ------------------------------------------------------------------ #
-    # Pass 2d — remove BP block JSON files with no RP counterpart.        #
-    # ------------------------------------------------------------------ #
+ 
     bp_blocks_dir = os.path.join(BP_FOLDER, "blocks")
     rp_blocks_dir = os.path.join(RP_FOLDER, "blocks")
     terrain_path  = os.path.join(RP_FOLDER, "textures", "terrain_texture.json")
@@ -9577,9 +9524,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
             if not has_rp:
                 _remove(fpath, "BP block JSON has no terrain_texture entry or RP block definition")
 
-    # ------------------------------------------------------------------ #
-    # Clean up empty directories left behind.                             #
-    # ------------------------------------------------------------------ #
+ 
     for folder in [RP_FOLDER, BP_FOLDER]:
         for root, dirs, files in os.walk(folder, topdown=False):
             if root == folder:
@@ -9589,8 +9534,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                     os.rmdir(root)
                 except OSError:
                     pass
-    # (removed list is mutated in-place; caller returns it)
-
+ 
 
 def run_validation_pass() -> list:
     warnings = []
@@ -9695,7 +9639,7 @@ def detect_mod_id(java_files: dict) -> str:
                     c = open(os.path.join(root, f), encoding="utf-8", errors="ignore").read()
                     m = re.search(r'modId\s*=\s*["\']([a-z0-9_-]+)["\']', c)
                     if m:
-                        print(f"[detect_mod_id] Found NeoForge mod ID in {f}: {m.group(1)!r}")
+
                         return sanitize_identifier(m.group(1))
                 except Exception:
                     pass
@@ -9734,7 +9678,7 @@ def detect_mod_id(java_files: dict) -> str:
                         if m:
                             candidate = sanitize_identifier(m.group(1))
                             if candidate and len(candidate) >= 2:
-                                print(f"[detect_mod_id] Found mod ID in {f}: {candidate!r}")
+
                                 return candidate
                 except Exception:
                     pass
@@ -9921,11 +9865,10 @@ def run_prescan(java_files: dict, namespace: str) -> str:
     ATTRS_REGISTRY  = build_attributes_registry(java_files)
     SOUND_CONST_MAP = build_sound_registry_from_java(java_files, ns)
     build_goal_inheritance_map(java_files)
-    print(f"[prescan] mod_id={ns!r} | entities={len(ENTITY_REGISTRY)} | "
-          f"attr_classes={len(ATTRS_REGISTRY)} | sounds={len(SOUND_CONST_MAP)} | "
-          f"inheritance_graph={len(_INHERITANCE_GRAPH)}")
+
     for cls, eid in list(ENTITY_REGISTRY.items())[:6]:
-        print(f"  {cls} -> {eid}")
+        pass
+
     return ns
 JAVA_TO_BEDROCK_BLOCK = {
     "minecraft:air": "minecraft:air",
@@ -10546,8 +10489,7 @@ def process_structures_from_jar(jar_path: str, namespace: str, java_files: dict 
                         out_path = os.path.join(mcstructure_dir, f"{safe_stem}.mcstructure")
                         with open(out_path, "wb") as out_f:
                             out_f.write(mcstructure_nbt)
-                        print(f"[structure] Converted {os.path.basename(file)} -> {safe_stem}.mcstructure "
-                              f"({mcstructure['size']})")
+
                         meta = {"biomes": ["overworld"], "step": "surface_pass",
                                 "spacing": 32, "separation": 8, "start_height": 64}
                         for cls_name, cls_meta in structure_meta_map.items():
@@ -10561,7 +10503,7 @@ def process_structures_from_jar(jar_path: str, namespace: str, java_files: dict 
                         structures_processed += 1
                         features_written += 1
                     except Exception as e:
-                        print(f"[structure]  Failed to convert {file}: {e}")
+                        _warn(f"[structure]  Failed to convert {file}: {e}")
                 elif "/worldgen/structure/" in lower and lower.endswith(".json"):
                     try:
                         with jar.open(file) as f:
@@ -10592,9 +10534,8 @@ def process_structures_from_jar(jar_path: str, namespace: str, java_files: dict 
                     except Exception:
                         pass
     except Exception as e:
-        print(f"[structure]  JAR read error: {e}")
-    print(f"[structure] Processed {structures_processed} structure(s), "
-          f"wrote {features_written} feature+rule pair(s)")
+        _warn(f"[structure]  JAR read error: {e}")
+
 def extract_logo_from_jar(jar_path: str) -> Optional[str]:
     if not jar_path or not os.path.exists(jar_path):
         return None
@@ -10613,12 +10554,12 @@ def extract_logo_from_jar(jar_path: str) -> Optional[str]:
                     temp_path = os.path.join(temp_dir, "pack_icon.png")
                     with open(temp_path, "wb") as out:
                         out.write(icon_data)
-                    print(f"[icon] Extracted {candidate} from JAR")
+
                     return temp_path
                 except KeyError:
                     continue
     except Exception as e:
-        print(f"[icon] Failed to extract icon from JAR: {e}")
+        _warn(f"[icon] Failed to extract icon from JAR: {e}")
     return None
 
 _MIXIN_KINDS = (
@@ -11012,7 +10953,6 @@ def scan_mixins(java_files: Dict[str, str], namespace: str) -> list[str]:
         out_path = os.path.join(out_dir, f'mixin_{safe_name}.js')
         with open(out_path, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(script_lines).rstrip() + '\n')
-        print(f'[mixin] Wrote {out_path}')
 
     if manifest:
         _safe_json_dump(os.path.join(OUTPUT_DIR, 'mixin_manifest.json'), manifest)
@@ -11044,8 +10984,6 @@ def _enhanced_postpass(namespace: str, java_files: Dict[str, str]) -> None:
     }
     _safe_json_dump(os.path.join(OUTPUT_DIR, 'conversion_report.json'), report)
     if notes:
-        # Write to the pack root, not inside bp/ — files inside bp/ are flagged
-        # as extraneous content by the validator (PRJINT101).
         port_notes = 'PORTING_NOTES.txt'
         with open(port_notes, 'a', encoding='utf-8') as fh:
             fh.write('\n'.join(notes) + '\n')
@@ -11065,7 +11003,7 @@ def run_pipeline():
     if jar_path:
         with _logger.phase("Extracting JAR assets", total=0, unit="step", colour="blue"):
             jar_loader = detect_loader_from_jar(jar_path)
-            print(f"[loader] {jar_loader}")
+
             copy_assets_from_jar(jar_path, RP_FOLDER)
             copy_geckolib_animations_from_jar(jar_path, RP_FOLDER)
             logo = extract_logo_from_jar(jar_path)
@@ -11084,11 +11022,11 @@ def run_pipeline():
                     else:
                         shutil.copy(logo, dest_bp)
                         shutil.copy(logo, dest_rp)
-                        print(" Copied pack icon without resizing (PIL not available)")
+
                     shutil.rmtree(".temp_logo_extract", ignore_errors=True)
                     shutil.rmtree(tmp_fixed_dir, ignore_errors=True)
                 except Exception as e:
-                    print(f" Failed to copy pack icon: {e}")
+                    _warn(f" Failed to copy pack icon: {e}")
     with _logger.phase("Normalising RP assets", total=0, unit="step", colour="blue"):
         normalize_geometry_file_identifiers()
         sanitize_animation_keys_in_files()
@@ -11117,7 +11055,7 @@ def run_pipeline():
     with _logger.phase("Pre-scanning registries", total=0, unit="step", colour="blue"):
         detected_mod_id = run_prescan(java_files, namespace)
         if detected_mod_id and detected_mod_id != namespace:
-            print(f"[prescan] mod_id → '{detected_mod_id}'")
+
             namespace = detected_mod_id
         build_renderer_entity_map()
     with _logger.phase("Converting LayerDefinition models", total=0, unit="step", colour="blue"):
@@ -11199,7 +11137,7 @@ def run_pipeline():
                         entity_identifier = reg_name or f"{namespace}:{clean_java_artifact_name(cls)}"
                     convert_java_to_bedrock(path, entity_identifier, gecko_maps, geom_file_map, geom_ns_map, anim_key_map, stats)
             except Exception as e:
-                print(f" Error processing {fname}: {e}")
+                _warn(f" Error processing {fname}: {e}")
                 stats["errors"].append(f"{path}: {e}")
             finally:
                 bar.update(1)
@@ -11268,46 +11206,6 @@ def run_pipeline():
     struct_count = len([f for f in os.listdir(struct_dir) if f.endswith(".mcstructure")]) if os.path.isdir(struct_dir) else 0
     feat_count  = len(os.listdir(os.path.join(BP_FOLDER, "features"))) if os.path.isdir(os.path.join(BP_FOLDER, "features")) else 0
     _orig("")
-    _orig("  ")
-    _orig("           ModMorpher — Conversion Done     ")
-    _orig("  ")
-    _orig(f"    BP entities   {len(stats['converted_entities_bp']):>4}                        ")
-    _orig(f"    RP entities   {len(stats['converted_entities_rp']):>4}                        ")
-    _orig(f"    Items         {len(stats['converted_items']):>4}                        ")
-    _orig(f"    Blocks        {len(stats['converted_blocks']):>4}                        ")
-    _orig(f"    Loot tables   {loot_count:>4}                        ")
-    _orig(f"    Recipes       {recipe_count:>4}                        ")
-    _orig(f"    Spawn rules   {spawn_count:>4}                        ")
-    if struct_count:
-        _orig(f"    Structures    {struct_count:>4}  ({feat_count} feature JSONs)   ")
-    scripts_dir = os.path.join(BP_FOLDER, "scripts")
-    script_count = len([f for f in os.listdir(scripts_dir) if f.endswith(".js") and f != "main.js"]) if os.path.isdir(scripts_dir) else 0
-    if script_count:
-        _orig(f"    Scripts       {script_count:>4}                        ")
-    if _PORTING_NOTES:
-        _orig(f"    Manual items  {len(_PORTING_NOTES):>4}  (see PORTING_NOTES.txt) ")
-    gui_dir = os.path.join(RP_FOLDER, "ui")
-    gui_count = len([f for f in os.listdir(gui_dir) if f.endswith(".json")]) if os.path.isdir(gui_dir) else 0
-    if gui_count:
-        _orig(f"    GUI screens   {gui_count:>4}  (controls + grid JSON)  ")
-    nbt_scripts = [f for f in (os.listdir(os.path.join(BP_FOLDER,"scripts")) if os.path.isdir(os.path.join(BP_FOLDER,"scripts")) else []) if f.endswith("_nbt.js")]
-    if nbt_scripts:
-        _orig(f"    NBT scripts   {len(nbt_scripts):>4}  (recursive serializers) ")
-    _orig("  ")
-    if stats["missing_geometry"]:
-        _orig(f"\n    {len(stats['missing_geometry'])} entity/entities using placeholder geometry:")
-        for j, ent in stats["missing_geometry"][:20]:
-            _orig(f"       {ent}  ← needs .geo.json")
-    if stats["errors"]:
-        _orig(f"\n    {len(stats['errors'])} error(s) during conversion:")
-        for e in stats["errors"][:10]:
-            _orig(f"       {e}")
-    if validation_warnings:
-        _orig(f"\n    {len(validation_warnings)} validation warning(s):")
-        for w in validation_warnings[:20]:
-            _orig(f"      {w}")
-    else:
-        _orig("\n    Validation passed — no broken references")
     _orig("")
     shutil.make_archive("Bedrock_Pack", "zip", "Bedrock_Pack")
     shutil.move("Bedrock_Pack.zip", "Bedrock_Pack.mcaddon")
@@ -11315,11 +11213,10 @@ def run_pipeline():
     for item in os.listdir(current_dir):
         if os.path.isdir(item) and item.startswith("src"):
             try:
-                print(f"Deleting: {item}")
+
                 shutil.rmtree(item)
             except Exception as e:
-                print(f"Failed to delete {item}: {e}")
-
+                _warn(f"Failed to delete {item}: {e}")
 Tool_Version = "1.5.0-upgraded"
 
 def _strip_java_comments(src: str) -> str:
@@ -12377,7 +12274,6 @@ def scan_mixins(java_files: Dict[str, str], namespace: str) -> None:
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(script_lines))
-            print(f"[mixin] Wrote {out_path}")
 
 def scan_fabric_quilt_mixins(java_files: Dict[str, str], namespace: str) -> None:
 
@@ -13232,8 +13128,6 @@ def _enhanced_postpass(namespace: str, java_files: Dict[str, str]) -> None:
     }
     _safe_json_dump(os.path.join(OUTPUT_DIR, 'conversion_report.json'), report)
     if notes:
-        # Write to the pack root, not inside bp/ — files inside bp/ are flagged
-        # as extraneous content by the validator (PRJINT101).
         port_notes = 'PORTING_NOTES.txt'
         with open(port_notes, 'a', encoding='utf-8') as fh:
             fh.write('\n'.join(notes) + '\n')
@@ -13352,64 +13246,62 @@ def _infer_target_event(
     """
     needle = f'{target_cls} {method_name} {body} {at_name} {raw}'.lower()
 
-    # Tick / scheduled update
+   
     if any(k in needle for k in (
         'tick', 'update', 'inventorytick', 'servertick', 'clienttick', 'aiset', 'dotick',
     )):
         return 'system.runInterval'
 
-    # Chat
+
     if any(k in needle for k in ('chat', 'sendchat', 'chatsend', 'message')):
         return 'world.beforeEvents.chatSend'
 
-    # Hurt / damage / attack
+
     if any(k in needle for k in ('hurt', 'damage', 'attack', 'hurtentity', 'actuallyhurt')):
         return 'world.afterEvents.entityHurt'
 
-    # Death
+ 
     if any(k in needle for k in ('death', 'die', 'killed', 'ondeath')):
         return 'world.afterEvents.entityDie'
 
-    # Spawn / join world
     if any(k in needle for k in ('spawn', 'join', 'entityjoin', 'addedtolevel', 'construct')):
         return 'world.afterEvents.entitySpawn'
 
-    # Explosion
+
     if any(k in needle for k in ('explode', 'explosion', 'detonate')):
         return 'world.afterEvents.explosion'
 
-    # Block break / mine
+
     if any(k in needle for k in ('break', 'destroy', 'mine', 'removeblock', 'leftclickblock', 'blockbreak')):
         return 'world.afterEvents.playerBreakBlock'
 
-    # Block place / interact with block
+
     if any(k in needle for k in ('place', 'useon', 'blockactivated', 'interactblock', 'rightclickblock', 'blockplace')):
         return 'world.afterEvents.playerPlaceBlock'
 
-    # Item use / finish using
+  
     if any(k in needle for k in ('itemuse', 'useitem', 'finishusingitem', 'appendtooltip', 'usetick')):
         return 'world.afterEvents.itemUse'
 
-    # Entity interaction (right-click entity)
+
     if any(k in needle for k in ('interact', 'rightclick', 'interactat', 'mount', 'attackentity')):
         return 'world.afterEvents.playerInteractWithEntity'
 
-    # Item pickup / drop
+ 
     if any(k in needle for k in ('pickup', 'pickupitem', 'itempickup')):
         return 'world.afterEvents.entitySpawn'
     if any(k in needle for k in ('drop', 'toss', 'throw', 'dropitem')):
         return 'world.afterEvents.entitySpawn'
 
-    # Craft
+ 
     if any(k in needle for k in ('craft', 'crafted', 'craftitem')):
         return 'world.afterEvents.itemCompleteUse'
 
-    # Generic block / tile-entity / worldgen fallback
+
     if any(k in needle for k in ('block', 'tileentity', 'worldgen', 'chunkload')):
         return 'world.afterEvents.playerPlaceBlock'
 
     return None
-
 
 def _param_binding_expr(java_type: str) -> str:
     """Return a JS expression that extracts the right value from a Bedrock event
@@ -13419,7 +13311,7 @@ def _param_binding_expr(java_type: str) -> str:
     parameter names expected by the translated mixin wrapper function.
     """
     base = java_type.strip()
-    # Strip generics and arrays
+
     base = re.sub(r'<[^>]*>', '', base).replace('[]', '').strip()
 
     player_types = {
@@ -13457,9 +13349,8 @@ def _param_binding_expr(java_type: str) -> str:
     if base == 'String':
         return '""'
 
-    # Generic fallback – expose the whole event and let the developer refine
-    return 'event'
 
+    return 'event'
 
 def _translate_java_body_to_js(body: str, namespace: str, safe_name: str) -> List[str]:
     """Translate a raw Java method body string to a list of JavaScript lines.
@@ -13487,15 +13378,13 @@ def _translate_java_body_to_js(body: str, namespace: str, safe_name: str) -> Lis
         except Exception:
             pass
 
-    # Fallback: emit each non-empty source line as a JS comment so the
-    # surrounding function scaffold at least stays syntactically valid.
+
     out: List[str] = []
     for ln in body.splitlines():
         stripped = ln.rstrip()
         if stripped:
             out.append('    // ' + stripped)
     return out
-
 
 def _event_subscription_lines(
     target_cls: str,
@@ -13709,7 +13598,6 @@ def _mixin_modifier_lines(
     lines.append('}')
     lines.append('')
     return lines
-
 
 def scan_fabric_quilt_mixins(java_files: Dict[str, str], namespace: str) -> List[str]:
     return scan_mixins(java_files, namespace)
