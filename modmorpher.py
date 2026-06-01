@@ -20,9 +20,6 @@ builtins.print = _silent_print
 
 class _SilentStream:
     def write(self, text):
-
-        if text.startswith(""):
-            _REAL_PRINT(text, end="")
         return len(text)
 
     def flush(self):
@@ -30,7 +27,7 @@ class _SilentStream:
 
 sys.stderr = _SilentStream()
 
-Tool_Version = "1.5.3.1"
+Tool_Version = "1.5.4"
 PROGRESS_AVAILABLE = True
 
 class _ProgressBar:
@@ -149,11 +146,15 @@ try:
     from PIL import Image
     PIL_AVAILABLE = True
 except Exception:
-    subprocess.check_call([
-        sys.executable,
-        "-m", "pip", "install", "pillow"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    PIL_AVAILABLE = True
+    try:
+        subprocess.check_call([
+            sys.executable,
+            "-m", "pip", "install", "pillow"
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        from PIL import Image
+        PIL_AVAILABLE = True
+    except Exception:
+        PIL_AVAILABLE = False
 JAVALANG_AVAILABLE = False
 try:
     import javalang
@@ -376,7 +377,7 @@ public class Dummy {{
             for path, node in tree:
                 if isinstance(node, javalang.tree.MethodDeclaration) and node.name == 'dummy':
                     for stmt in node.body:
-                        js_stmts = translate_statement(stmt, player, namespace)
+                        js_stmts = translate_statement(stmt, player, namespace, JavaSymbolTable())
                         lines.extend(js_stmts)
             return lines
         except Exception:
@@ -427,7 +428,9 @@ def translate_method_invocation(invocation: object, player: str, namespace: str,
 
     return None
 
-def translate_statement(stmt: object, player: str, namespace: str, symbol_table: JavaSymbolTable) -> list:
+def translate_statement(stmt: object, player: str, namespace: str, symbol_table: Optional['JavaSymbolTable'] = None) -> list:
+    if symbol_table is None:
+        symbol_table = JavaSymbolTable()
     if isinstance(stmt, javalang.tree.StatementExpression):
         expr = stmt.expression
         if isinstance(expr, javalang.tree.MethodInvocation):
@@ -442,7 +445,7 @@ def translate_statement(stmt: object, player: str, namespace: str, symbol_table:
     elif isinstance(stmt, javalang.tree.LocalVariableDeclaration):
 
         type_name = stmt.type.name if hasattr(stmt.type, 'name') else str(stmt.type)
-        js_type = 'let'                  
+        js_type = 'let'
         for decl in stmt.declarators:
             var_name = decl.name
             init = ''
@@ -460,24 +463,24 @@ def translate_statement(stmt: object, player: str, namespace: str, symbol_table:
             then_stmts = stmt.then_statement
             if isinstance(then_stmts, javalang.tree.BlockStatement):
                 for s in then_stmts.statements:
-                    lines.extend(translate_statement(s, player, namespace))
+                    lines.extend(translate_statement(s, player, namespace, symbol_table))
             elif isinstance(then_stmts, list):
                 for s in then_stmts:
-                    lines.extend(translate_statement(s, player, namespace))
+                    lines.extend(translate_statement(s, player, namespace, symbol_table))
             else:
-                lines.extend(translate_statement(then_stmts, player, namespace))
+                lines.extend(translate_statement(then_stmts, player, namespace, symbol_table))
             lines.append('    }')
             if stmt.else_statement:
                 lines.append('    else {')
                 else_stmts = stmt.else_statement
                 if isinstance(else_stmts, javalang.tree.BlockStatement):
                     for s in else_stmts.statements:
-                        lines.extend(translate_statement(s, player, namespace))
+                        lines.extend(translate_statement(s, player, namespace, symbol_table))
                 elif isinstance(else_stmts, list):
                     for s in else_stmts:
-                        lines.extend(translate_statement(s, player, namespace))
+                        lines.extend(translate_statement(s, player, namespace, symbol_table))
                 else:
-                    lines.extend(translate_statement(else_stmts, player, namespace))
+                    lines.extend(translate_statement(else_stmts, player, namespace, symbol_table))
                 lines.append('    }')
             return lines
     elif isinstance(stmt, javalang.tree.ReturnStatement):
@@ -499,35 +502,55 @@ def translate_statement(stmt: object, player: str, namespace: str, symbol_table:
             if stmt.body:
                 body_list = stmt.body if isinstance(stmt.body, list) else [stmt.body]
                 for s in body_list:
-                    lines.extend(translate_statement(s, player, namespace))
+                    lines.extend(translate_statement(s, player, namespace, symbol_table))
             lines.append('    }')
         return lines
 
     return []
 
-def translate_expression(expr: object) -> Optional[str]:
+def translate_expression(expr: object, symbol_table=None) -> Optional[str]:
+    if expr is None:
+        return None
+    if isinstance(expr, str):
+        return expr
+    if not JAVALANG_AVAILABLE:
+        if hasattr(expr, 'value'):
+            return str(expr.value)
+        return str(expr)
     if isinstance(expr, javalang.tree.Literal):
         return str(expr.value)
     elif isinstance(expr, javalang.tree.MemberReference):
-        return expr.member
+        qualifier = f'{expr.qualifier}.' if getattr(expr, 'qualifier', None) else ''
+        return f'{qualifier}{expr.member}'
     elif isinstance(expr, javalang.tree.MethodInvocation):
-
         member = getattr(expr, 'member', '')
         args = getattr(expr, 'arguments', [])
-        arg_strs = []
-        for arg in args:
-            arg_trans = translate_expression(arg)
-            if arg_trans:
-                arg_strs.append(arg_trans)
-        return f'{member}({", ".join(arg_strs)})'
+        arg_strs = [translate_expression(a, symbol_table) for a in args]
+        arg_strs = [a for a in arg_strs if a is not None]
+        qual = f'{expr.qualifier}.' if getattr(expr, 'qualifier', None) else ''
+        return f'{qual}{member}({", ".join(arg_strs)})'
     elif isinstance(expr, javalang.tree.BinaryOperation):
-        left = translate_expression(expr.operandl)
-        right = translate_expression(expr.operandr)
-        op = expr.operator
-        if left and right:
-            return f'{left} {op} {right}'
-
-    return None
+        left = translate_expression(expr.operandl, symbol_table)
+        right = translate_expression(expr.operandr, symbol_table)
+        if left is not None and right is not None:
+            return f'({left} {expr.operator} {right})'
+    elif isinstance(expr, javalang.tree.Cast):
+        return translate_expression(expr.expression, symbol_table)
+    elif isinstance(expr, javalang.tree.TernaryExpression):
+        cond = translate_expression(expr.condition, symbol_table)
+        t = translate_expression(expr.if_true, symbol_table)
+        f = translate_expression(expr.if_false, symbol_table)
+        if cond and t and f:
+            return f'({cond} ? {t} : {f})'
+    elif isinstance(expr, javalang.tree.This):
+        return 'this'
+    elif isinstance(expr, javalang.tree.SuperMethodInvocation):
+        args = [translate_expression(a, symbol_table) for a in (expr.arguments or [])]
+        args = [a for a in args if a is not None]
+        return f'super.{expr.member}({", ".join(args)})'
+    if hasattr(expr, 'value'):
+        return str(expr.value)
+    return str(expr)
 
 def detect_tick_method(java_code: str) -> Optional[Tuple[str, str]]:
     if not JAVALANG_AVAILABLE:
@@ -11920,15 +11943,7 @@ def _expr_to_js_text(expr: object, symbol_table: Optional[JavaSymbolTable] = Non
     s = s.replace('true', 'true').replace('false', 'false')
     return s
 
-def translate_expression(expr: object, symbol_table: Optional[JavaSymbolTable] = None) -> Optional[str]:
-    if expr is None:
-        return None
-    try:
-        if JAVALANG_AVAILABLE:
-            return _expr_to_js_text(expr, symbol_table)
-    except Exception:
-        pass
-    return _expr_to_js_text(expr, symbol_table)
+# translate_expression is defined once near the top of this module with full symbol_table support.
 
 def _translate_block_stmt_list(stmts, player: str, namespace: str, symbol_table: Optional[JavaSymbolTable]) -> list[str]:
     out: list[str] = []
@@ -12763,43 +12778,7 @@ class JavaSymbolTable:
                 pass
         self._scan_regex(java_code)
 
-def translate_expression(expr: object) -> Optional[str]:
-    if expr is None:
-        return None
-    if isinstance(expr, str):
-        return expr
-    if JAVALANG_AVAILABLE:
-        if isinstance(expr, javalang.tree.Literal):
-            return str(expr.value)
-        if isinstance(expr, javalang.tree.MemberReference):
-            qualifier = f'{expr.qualifier}.' if getattr(expr, 'qualifier', None) else ''
-            return f'{qualifier}{expr.member}'
-        if isinstance(expr, javalang.tree.MethodInvocation):
-            args = [translate_expression(a) for a in (expr.arguments or [])]
-            args = [a for a in args if a is not None]
-            qual = f'{expr.qualifier}.' if getattr(expr, 'qualifier', None) else ''
-            return f'{qual}{expr.member}({", ".join(args)})'
-        if isinstance(expr, javalang.tree.BinaryOperation):
-            left = translate_expression(expr.operandl)
-            right = translate_expression(expr.operandr)
-            if left is not None and right is not None:
-                return f'({left} {expr.operator} {right})'
-        if isinstance(expr, javalang.tree.Cast):
-            return translate_expression(expr.expression)
-        if isinstance(expr, javalang.tree.TernaryExpression):
-            cond = translate_expression(expr.condition)
-            t = translate_expression(expr.if_true)
-            f = translate_expression(expr.if_false)
-            if cond and t and f:
-                return f'({cond} ? {t} : {f})'
-        if isinstance(expr, javalang.tree.This):
-            return 'this'
-        if isinstance(expr, javalang.tree.SuperMethodInvocation):
-            args = [translate_expression(a) for a in (expr.arguments or []) if translate_expression(a) is not None]
-            return f'super.{expr.member}({", ".join(args)})'
-    if hasattr(expr, 'value'):
-        return str(expr.value)
-    return str(expr)
+# translate_expression is defined once near the top of this module with full symbol_table support.
 
 def translate_method_invocation(invocation: object, player: str, namespace: str, symbol_table: JavaSymbolTable) -> Optional[str]:
     member = getattr(invocation, 'member', '')
@@ -13075,23 +13054,6 @@ def generate_bedrock_runtime_bridge(namespace: str) -> list[str]:
         '  },',
         '  onPlayerDimensionChange: (fn) => world.afterEvents.playerDimensionChange.subscribe(fn),',
         '  safeCall: (fn, fallback = undefined) => { try { return fn(); } catch { return fallback; } },',
-        '  getBlockFromRay: (dimensionId, origin, direction, options = {}) => {',
-        '    const dimension = world.getDimension(dimensionId);',
-        '    return dimension ? dimension.getBlockFromRay(origin, direction, options) : null;',
-        '  },',
-        '  containsBiomes: (dimensionId, volume, biomeFilter, isSuperset = false) => {',
-        '    const dimension = world.getDimension(dimensionId);',
-        '    return dimension ? dimension.containsBiomes(volume, { biomeFilter, isSuperset }) : false;',
-        '  },',
-        '  fillBlocks: (dimensionId, volume, permutation, options = {}) => {',
-        '    const dimension = world.getDimension(dimensionId);',
-        '    return dimension ? dimension.fillBlocks(volume, permutation, options) : false;',
-        '  },',
-        '  spawnEntityInDimension: (dimensionId, typeId, location) => {',
-        '    const dimension = world.getDimension(dimensionId);',
-        '    return dimension ? dimension.spawnEntity(typeId, location) : null;',
-        '  },',
-        '  safeCall: (fn, fallback = undefined) => { try { return fn(); } catch { return fallback; } },',
         '};',
         '',
         'export function isTargetType(entity, id) {',
@@ -13183,9 +13145,9 @@ def _mixin_event_guess(target_cls: str, method_name: str, annotation_args: str, 
     if any(k in needle for k in ('explode', 'explosion', 'detonate')):
         return 'world.afterEvents.explosion'
     if any(k in needle for k in ('pickup', 'pick up', 'pickupitem')):
-        return 'world.afterEvents.entitySpawn'
+        return 'world.afterEvents.playerPickUpItem'
     if any(k in needle for k in ('drop', 'toss', 'throw')):
-        return 'world.afterEvents.entitySpawn'
+        return 'world.afterEvents.playerDropItem'
     if any(k in needle for k in ('useon', 'place', 'blockactivated', 'interactblock', 'rightclickblock')):
         return 'world.afterEvents.playerPlaceBlock'
     if any(k in needle for k in ('break', 'destroy', 'mine', 'removeblock', 'leftclickblock')):
@@ -13289,9 +13251,9 @@ def _infer_target_event(
 
  
     if any(k in needle for k in ('pickup', 'pickupitem', 'itempickup')):
-        return 'world.afterEvents.entitySpawn'
+        return 'world.afterEvents.playerPickUpItem'
     if any(k in needle for k in ('drop', 'toss', 'throw', 'dropitem')):
-        return 'world.afterEvents.entitySpawn'
+        return 'world.afterEvents.playerDropItem'
 
  
     if any(k in needle for k in ('craft', 'crafted', 'craftitem')):
