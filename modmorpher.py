@@ -27,7 +27,7 @@ class _SilentStream:
 
 sys.stderr = _SilentStream()
 
-Tool_Version = "1.5.4"
+Tool_Version = "1.5.3.1(hotfix #1)"
 PROGRESS_AVAILABLE = True
 
 class _ProgressBar:
@@ -1992,14 +1992,14 @@ def create_manifest(pack_name: str, pack_type: str, has_scripting: bool = False)
             "name": pack_name,
             "description": f"{pack_name} converted pack",
             "uuid": str(uuid.uuid4()),
-            "version": "1.0.0",
-            "min_engine_version": "1.21.50"
+            "version": [1, 0, 0],
+            "min_engine_version": [1, 21, 50]
         },
         "modules": [
             {
                 "type": "resources" if pack_type == "RP" else "data",
                 "uuid": str(uuid.uuid4()),
-                "version": "1.0.0"
+                "version": [1, 0, 0]
             }
         ]
     }
@@ -2008,7 +2008,7 @@ def create_manifest(pack_name: str, pack_type: str, has_scripting: bool = False)
             "type": "script",
             "language": "javascript",
             "uuid": str(uuid.uuid4()),
-            "version": "1.0.0",
+            "version": [1, 0, 0],
             "entry": "scripts/main.js"
         })
     return manifest
