@@ -27,7 +27,7 @@ class _SilentStream:
 
 sys.stderr = _SilentStream()
 
-Tool_Version = "1.5.3.1(hotfix #1)"
+Tool_Version = "1.5.5 'After extensive scientific research, we determined that 200 health is not the same thing as 200 armor.'"
 PROGRESS_AVAILABLE = True
 
 class _ProgressBar:
@@ -137,6 +137,8 @@ class _ProgressLogger:
 _logger = _ProgressLogger()
 _warn = lambda *a: None
 _ALL_JAVA_FILES: Dict[str, str] = {}
+_DEOBFUSCATED_JAVA_FILES: Dict[str, str] = {}
+_DEOBFUSCATED_JAVA_PATHS: Dict[str, str] = {}
 _RP_ASSET_INDEX: Dict[str, Union[list, dict]] = {
     "textures": [],
     "geometry": [],
@@ -395,6 +397,16 @@ def translate_method_invocation(invocation: object, player: str, namespace: str,
         qualifier = None
     args = getattr(invocation, 'arguments', [])
 
+    if qualifier and symbol_table is not None:
+        try:
+            translated_args = [translate_expression(arg) for arg in args]
+            translated_args = [a for a in translated_args if a is not None]
+            resolved = symbol_table.resolve_method_call(str(qualifier), member, translated_args)
+            if resolved:
+                return f'    {resolved};'
+        except Exception:
+            pass
+
     if member == 'receiveEnergy':
         if args and isinstance(args[0], javalang.tree.Literal):
             amt = args[0].value
@@ -527,8 +539,16 @@ def translate_expression(expr: object, symbol_table=None) -> Optional[str]:
         args = getattr(expr, 'arguments', [])
         arg_strs = [translate_expression(a, symbol_table) for a in args]
         arg_strs = [a for a in arg_strs if a is not None]
-        qual = f'{expr.qualifier}.' if getattr(expr, 'qualifier', None) else ''
-        return f'{qual}{member}({", ".join(arg_strs)})'
+        qual = getattr(expr, 'qualifier', None)
+        if qual and symbol_table is not None:
+            try:
+                resolved = symbol_table.resolve_method_call(str(qual), member, arg_strs)
+                if resolved:
+                    return resolved
+            except Exception:
+                pass
+        qual_prefix = f'{qual}.' if qual else ''
+        return f'{qual_prefix}{member}({", ".join(arg_strs)})'
     elif isinstance(expr, javalang.tree.BinaryOperation):
         left = translate_expression(expr.operandl, symbol_table)
         right = translate_expression(expr.operandr, symbol_table)
@@ -3892,8 +3912,18 @@ def load_animation_keys() -> Dict[str, Set[str]]:
         result[os.path.splitext(fname)[0].lower()] = keys
     return result
 def read_all_java_files(root_dir=".") -> Dict[str, str]:
+    if root_dir == "." and _DEOBFUSCATED_JAVA_FILES:
+        return dict(_DEOBFUSCATED_JAVA_FILES)
+
     java_files = {}
+    skip_dir = os.path.normpath(OUTPUT_DIR)
     for root, dirs, files in os.walk(root_dir):
+        norm_root = os.path.normpath(root)
+        dirs[:] = [
+            d for d in dirs
+            if not os.path.normpath(os.path.join(norm_root, d)).startswith(skip_dir + os.sep)
+            and os.path.normpath(os.path.join(norm_root, d)) != skip_dir
+        ]
         for f in files:
             if f.endswith(".java"):
                 path = os.path.join(root, f)
@@ -3903,6 +3933,251 @@ def read_all_java_files(root_dir=".") -> Dict[str, str]:
                 except Exception:
                     continue
     return java_files
+
+def _is_probably_obfuscated_java_name(name: Optional[str]) -> bool:
+    if not name:
+        return True
+    n = re.sub(r'[^A-Za-z0-9_$]', '', str(name))
+    if not n:
+        return True
+    if len(n) <= 2:
+        return True
+    if re.fullmatch(r'(?:[a-zA-Z]|\d+|[A-Za-z]?\d+[A-Za-z]?)', n):
+        return True
+    if n.startswith(('func_', 'field_', 'm_', 'f_', 'lambda$', 'access$')):
+        return True
+    return False
+
+def _infer_java_class_role(java_code: str, filename: str = '', cls_name: Optional[str] = None) -> str:
+    haystack = ' '.join([
+        str(cls_name or ''),
+        os.path.basename(filename) or '',
+        os.path.splitext(os.path.basename(filename))[0] if filename else '',
+        java_code[:1600] if java_code else '',
+    ]).lower()
+
+    role_checks = [
+        ('renderer', ['renderer', 'geomodel', 'geoentityrenderer', 'blockentityrenderer', 'layerrenderer']),
+        ('model', ['model', 'layerdefinition', 'meshdefinition', 'modelpart', 'createbodylayer', 'getmodelresource']),
+        ('screen', ['screen', 'gui', 'abstractcontainerscreen', 'container screen', 'chestscreen']),
+        ('entity', ['extends entity', 'livingentity', 'mob', 'animal', 'monster', 'projectile', 'entitytype']),
+        ('block', ['extends block', 'blockstate', 'blockentity', 'tileentity', 'createblockstatedefinition']),
+        ('item', ['extends item', 'itemstack', 'useon', 'inventorytick']),
+        ('goal', ['goal', 'pathfind', 'targetselector', 'setmutexbits']),
+        ('event_handler', ['@subscribeevent', 'eventbus', 'forgeevent', 'clienttickevent', 'servertickevent']),
+        ('mixin', ['@mixin', 'inject(', 'redirect(', 'overwrite(', 'accessor(', 'invoker(']),
+        ('registry', ['deferredregister', 'registryobject', 'registerevent', 'bootstrapcontext']),
+        ('capability', ['capability', 'ifluidhandler', 'ienergystorage', 'iitemhandler']),
+        ('packet', ['packet', 'network', 'friendlybytebuf', 'serverbound', 'clientbound']),
+    ]
+
+    for role, needles in role_checks:
+        if any(n in haystack for n in needles):
+            return role
+
+    if '@mod(' in haystack or 'modid' in haystack or 'fabric.mod.json' in haystack:
+        return 'mod_main'
+
+    return 'class'
+
+def _unique_java_name(base: str, used: Set[str]) -> str:
+    candidate = sanitize_identifier(base) or "class"
+    if candidate not in used:
+        used.add(candidate)
+        return candidate
+    index = 2
+    while f"{candidate}_{index}" in used:
+        index += 1
+    candidate = f"{candidate}_{index}"
+    used.add(candidate)
+    return candidate
+
+def _semantic_member_name(role: str, kind: str, member_name: str, return_type: str = '', param_types: Optional[List[str]] = None, java_code: str = '') -> Optional[str]:
+    if not _is_probably_obfuscated_java_name(member_name):
+        return None
+
+    lowered = (java_code or '').lower()
+    return_type = (return_type or '').strip()
+
+    if kind == 'method':
+        if role == 'renderer':
+            if 'resourcelocation' in return_type.lower():
+                if 'texture' in lowered:
+                    return 'getTextureLocation'
+                if 'model' in lowered or 'geo' in lowered:
+                    return 'getModelResource'
+            if return_type.lower() == 'void':
+                return 'render'
+        elif role == 'model':
+            if 'layerdefinition' in return_type.lower():
+                return 'createBodyLayer'
+            if return_type.lower() == 'void' and len(param_types or []) >= 4:
+                return 'setupAnim'
+        elif role == 'screen':
+            if return_type.lower() == 'void':
+                if 'init' in lowered:
+                    return 'init'
+                return 'render'
+        elif role == 'registry':
+            return 'register'
+        elif role == 'event_handler':
+            return 'handleEvent'
+        elif role == 'goal':
+            return 'tick'
+        elif role == 'entity':
+            if return_type.lower() == 'void':
+                return 'tick'
+        elif role == 'packet':
+            if return_type.lower() == 'void':
+                if 'encode' in lowered:
+                    return 'encode'
+                if 'decode' in lowered:
+                    return 'decode'
+                return 'handlePacket'
+        return f"{role}_method"
+
+    if kind == 'field':
+        if role == 'renderer':
+            return 'render_state'
+        if role == 'model':
+            return 'model_state'
+        if role == 'entity':
+            return 'entity_state'
+        return f"{role}_field"
+
+    return None
+
+def _rewrite_java_identifiers(source: str, rename_map: Dict[str, str]) -> str:
+    if not rename_map:
+        return source
+    for old_name, new_name in sorted(rename_map.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if not old_name or not new_name or old_name == new_name:
+            continue
+        source = re.sub(rf'\b{re.escape(old_name)}\b', new_name, source)
+    return source
+
+def deobfuscate_java_sources(java_files: Dict[str, str], namespace: str = "") -> Dict[str, str]:
+    global _DEOBFUSCATED_JAVA_FILES, _DEOBFUSCATED_JAVA_PATHS
+
+    out_root = os.path.join(OUTPUT_DIR, "deobfuscated_java")
+    os.makedirs(out_root, exist_ok=True)
+
+    class_name_map: Dict[str, str] = {}
+    path_to_class: Dict[str, str] = {}
+    path_to_role: Dict[str, str] = {}
+    used_class_names: Set[str] = set()
+
+    for path, code in java_files.items():
+        cls_name = extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
+        path_to_class[path] = cls_name
+        role = _infer_java_class_role(code, path, cls_name)
+        path_to_role[path] = role
+
+        stem = clean_java_artifact_name(cls_name) or clean_java_artifact_name(os.path.splitext(os.path.basename(path))[0])
+        if not stem:
+            stem = role
+
+        if _is_probably_obfuscated_java_name(cls_name) or len(stem) <= 2 or stem in {'class', 'entity', 'model', 'renderer', 'screen'}:
+            base = f"{role}_{stem or 'class'}"
+        else:
+            base = stem
+
+        class_name_map[cls_name] = _unique_java_name(base, used_class_names)
+
+    rewritten: Dict[str, str] = {}
+    rewritten_paths: Dict[str, str] = {}
+
+    for path, code in java_files.items():
+        cls_name = path_to_class.get(path) or extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
+        role = path_to_role.get(path, 'class')
+        rename_map: Dict[str, str] = {}
+
+        new_class_name = class_name_map.get(cls_name)
+        if new_class_name and new_class_name != cls_name:
+            rename_map[cls_name] = new_class_name
+
+        ast = JavaAST(code)
+        ast._parse()
+        tree = getattr(ast, '_tree', None)
+
+        if tree is not None:
+            try:
+                for _, node in tree.filter(javalang.tree.ClassDeclaration):
+                    if node.name != cls_name:
+                        continue
+
+                    method_index = 1
+                    field_index = 1
+                    for method in (node.methods or []):
+                        old_name = getattr(method, 'name', '')
+                        ret_type = ''
+                        if getattr(method, 'return_type', None) is not None and hasattr(method.return_type, 'name'):
+                            ret_type = method.return_type.name
+                        params = []
+                        for p in (getattr(method, 'parameters', None) or []):
+                            if hasattr(p.type, 'name'):
+                                params.append(p.type.name)
+                            else:
+                                params.append(str(p.type))
+
+                        semantic = _semantic_member_name(role, 'method', old_name, ret_type, params, code)
+                        if semantic:
+                            new_name = semantic
+                            if new_name in rename_map.values():
+                                new_name = f"{semantic}_{method_index}"
+                            rename_map[old_name] = new_name
+                            method_index += 1
+
+                    for field in (node.fields or []):
+                        for decl in (getattr(field, 'declarators', None) or []):
+                            old_name = getattr(decl, 'name', '')
+                            semantic = _semantic_member_name(role, 'field', old_name, '', None, code)
+                            if semantic:
+                                new_name = semantic
+                                if new_name in rename_map.values():
+                                    new_name = f"{semantic}_{field_index}"
+                                rename_map[old_name] = new_name
+                                field_index += 1
+                    break
+            except Exception:
+                pass
+
+        new_code = _rewrite_java_identifiers(code, rename_map)
+
+        rel_path = os.path.relpath(path, '.')
+        rel_dir = os.path.dirname(rel_path)
+        target_dir = os.path.join(out_root, rel_dir)
+        os.makedirs(target_dir, exist_ok=True)
+        target_name = f"{sanitize_identifier(new_class_name or cls_name)}.java"
+        target_path = os.path.join(target_dir, target_name)
+        try:
+            with open(target_path, 'w', encoding='utf-8') as fh:
+                fh.write(new_code)
+        except Exception:
+            pass
+
+        rewritten[target_path] = new_code
+        rewritten_paths[path] = target_path
+
+    _DEOBFUSCATED_JAVA_FILES = rewritten
+    _DEOBFUSCATED_JAVA_PATHS = rewritten_paths
+
+    try:
+        _safe_json_dump(
+            os.path.join(OUTPUT_DIR, 'deobfuscated_java_map.json'),
+            {
+                'namespace': namespace,
+                'source_files': len(java_files),
+                'deobfuscated_files': len(rewritten),
+                'paths': rewritten_paths,
+                'classes': class_name_map,
+            },
+        )
+    except Exception:
+        pass
+
+    return rewritten
+
 def extract_class_name(java_code: str) -> Optional[str]:
     ast = JavaAST(java_code)
     name = ast.primary_class_name()
@@ -4303,7 +4578,54 @@ def extract_attributes_from_java(java_code: str) -> dict:
                 val = _parse_java_float(val_str)
                 if val is not None:
                     results[POSITIONAL_ORDER[i]] = val
+
+    results = _normalize_entity_attributes(results, block)
     return results
+
+def _normalize_entity_attributes(results: Dict[str, float], block: str = "") -> Dict[str, float]:
+    """Normalize attribute guesses after extraction.
+
+    This corrects common obfuscation/mapping failures where health and armor
+    get swapped or health is left at a placeholder zero while armor carries the
+    real value.
+    """
+    if not results:
+        return results
+
+    out = dict(results)
+
+    health = out.get("health")
+    armor = out.get("armor")
+
+ 
+    if health is not None and armor is not None:
+        if (health <= 0 or health < 1) and armor >= 20:
+            out["health"] = armor
+            out["armor"] = 0.0
+        elif armor > health and armor >= 100 and health <= 20:
+            out["health"], out["armor"] = armor, health
+
+
+    if out.get("health", 0) <= 0:
+        m = re.search(
+            r'(?:setHealth|setMaxHealth|setCurrentValue|getAttribute\s*\(\s*Attributes\.(?:MAX_HEALTH|GENERIC_MAX_HEALTH|HEALTH)\s*\))\s*'
+            r'(?:\(|\.setBaseValue\s*\()\s*([-+]?[0-9]*\.?[0-9]+[DdFfLl]?)',
+            block,
+            re.IGNORECASE | re.DOTALL
+        )
+        if m:
+            val = _parse_java_float(m.group(1))
+            if val is not None and val > 0:
+                out["health"] = val
+
+
+    if out.get("health", 0) <= 0 and out.get("armor", 0) > 0:
+        if out["armor"] >= 50:
+            out["health"] = out["armor"]
+            out["armor"] = 0.0
+
+    return out
+
 def extract_animations_from_java(java_code: str, namespace: Optional[str] = None, entity_name: Optional[str] = None):
     animations = set()
     MOTION_KEYWORDS = {
@@ -5534,6 +5856,255 @@ def find_entity_assets_aggressively(
             pass
 
     return tex_ref, geom_ident
+
+
+def _path_looks_like_procedure(path: str, code: str = "") -> bool:
+    norm_path = os.path.normpath(path).lower()
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    if "procedure" in stem or "procudure" in stem or "procedures" in norm_path:
+        return True
+    if re.search(r'\b(?:procedure|procudure)\b', code or "", re.I):
+        return True
+    return False
+
+def _procedure_entity_tokens(entity_identifier: str,
+                             entity_cls_name: Optional[str] = None,
+                             entity_basename: Optional[str] = None) -> Set[str]:
+    tokens: Set[str] = set()
+    for name in (entity_identifier, entity_cls_name, entity_basename):
+        if not name:
+            continue
+        clean = str(name).split(":")[-1]
+        tokens.update(_camel_tokens(clean))
+        tokens.update(
+            t for t in re.split(r'[^A-Za-z0-9]+', clean.lower())
+            if len(t) > 1
+        )
+    return {t for t in tokens if len(t) > 1}
+
+def _procedure_matches_entity(path: str, code: str, entity_identifier: str,
+                              entity_cls_name: Optional[str] = None,
+                              entity_basename: Optional[str] = None) -> bool:
+    if not _path_looks_like_procedure(path, code):
+        return False
+
+    norm_path = os.path.normpath(path).lower()
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    hay = " ".join([
+        norm_path,
+        stem,
+        code[:4000] if code else "",
+        entity_identifier.lower() if entity_identifier else "",
+        (entity_cls_name or "").lower(),
+        (entity_basename or "").lower(),
+    ])
+
+    tokens = _procedure_entity_tokens(entity_identifier, entity_cls_name, entity_basename)
+    score = 0.0
+    if "/procedures/" in norm_path or norm_path.endswith("/procedures"):
+        score += 0.75
+    if "procedure" in stem or "procudure" in stem:
+        score += 0.4
+    if entity_identifier and entity_identifier.lower() in hay:
+        score += 2.0
+    if entity_cls_name and re.search(rf'\b{re.escape(entity_cls_name)}\b', code or "", re.I):
+        score += 1.25
+    if entity_basename and re.search(rf'\b{re.escape(entity_basename)}\b', code or "", re.I):
+        score += 1.25
+
+    shared = 0
+    for tok in sorted(tokens, key=len, reverse=True):
+        if len(tok) >= 3 and re.search(rf'\b{re.escape(tok)}\b', hay, re.I):
+            shared += 1
+    score += min(shared, 4) * 0.35
+
+    if re.search(r'\b(?:execute|tick|update|spawn|hurt|attack|interact|entity)\b', hay, re.I):
+        score += 0.25
+
+    return score >= 1.2
+
+def _collect_entity_procedure_sources(java_code: str, java_path: str,
+                                      entity_identifier: str,
+                                      entity_cls_name: Optional[str] = None,
+                                      entity_basename: Optional[str] = None) -> List[Tuple[str, str]]:
+    if not _ALL_JAVA_FILES:
+        return []
+
+    collected: List[Tuple[str, str]] = []
+    for path, code in _ALL_JAVA_FILES.items():
+        if path == java_path:
+            continue
+        if not _procedure_matches_entity(path, code, entity_identifier, entity_cls_name, entity_basename):
+            continue
+        collected.append((path, code))
+
+    collected.sort(
+        key=lambda item: (
+            -int("/procedures/" in os.path.normpath(item[0]).lower()),
+            -int("procedure" in os.path.basename(item[0]).lower()),
+            -len(item[1]),
+            os.path.basename(item[0]).lower(),
+        )
+    )
+    return collected[:12]
+
+def _extract_procedure_method_bodies(java_code: str) -> List[Tuple[str, str]]:
+    method_names = [
+        "execute", "executeProcedure", "onExecute", "tick", "update",
+        "run", "apply", "process", "handle", "onUpdate", "entityTick"
+    ]
+    bodies: List[Tuple[str, str]] = []
+    for method_name in method_names:
+        body = _extract_method_body(java_code, [method_name])
+        if body:
+            bodies.append((method_name, body))
+    if not bodies and "public static void" in java_code and "entity" in java_code.lower():
+        body = _extract_method_body(java_code, ["execute"])
+        if body:
+            bodies.append(("execute", body))
+    return bodies
+
+def _translate_procedure_body_to_js(java_body: str, namespace: str,
+                                    entity_var: str = "entity") -> List[str]:
+    if not java_body:
+        return []
+    if not JAVALANG_AVAILABLE:
+        return [
+            f'// {line.strip()}'
+            for line in java_body.splitlines()
+            if line.strip()
+        ]
+
+    dummy_code = f"""
+public class Dummy {{
+    public void dummy() {{
+        {java_body}
+    }}
+}}
+"""
+    try:
+        tree = javalang.parse.parse(dummy_code)
+    except Exception:
+        return [
+            f'// {line.strip()}'
+            for line in java_body.splitlines()
+            if line.strip()
+        ]
+
+    symbol_table = JavaSymbolTable()
+    symbol_table.set_variable_type(entity_var, "Entity")
+    lines: List[str] = []
+    for _, node in tree.filter(javalang.tree.MethodDeclaration):
+        if node.name != "dummy":
+            continue
+        for stmt in node.body or []:
+            translated = translate_statement(stmt, entity_var, namespace, symbol_table)
+            if translated:
+                lines.extend(translated)
+
+    if not lines:
+        return [
+            f'// {line.strip()}'
+            for line in java_body.splitlines()
+            if line.strip()
+        ]
+    return lines
+
+def _infer_procedure_trigger(path: str, code: str) -> str:
+    hay = " ".join([
+        os.path.basename(path).lower(),
+        os.path.splitext(os.path.basename(path))[0].lower(),
+        code[:2500].lower() if code else "",
+    ])
+    if re.search(r'\b(spawn|join|load|init|onentityspawn)\b', hay):
+        return "spawn"
+    if re.search(r'\b(hurt|damage|attack|interact|use|click|rightclick|leftclick)\b', hay):
+        return "event"
+    return "tick"
+
+def _emit_entity_procedure_script(entity_identifier: str, namespace: str,
+                                  related_sources: List[Tuple[str, str]],
+                                  bp_folder: str) -> Optional[str]:
+    if not related_sources:
+        return None
+
+    safe_entity = sanitize_identifier(entity_identifier.split(":")[-1]) or "entity"
+    script_lines: List[str] = [
+        'import { world, system } from "@minecraft/server";',
+        '',
+        f'// Auto-generated procedure bridge for {entity_identifier}',
+        'const PROCEDURE_HANDLERS = [];',
+        '',
+    ]
+
+    for idx, (src_path, src_code) in enumerate(related_sources):
+        src_name = extract_class_name(src_code) or os.path.splitext(os.path.basename(src_path))[0]
+        src_safe = sanitize_identifier(src_name) or f"procedure_{idx}"
+        trigger = _infer_procedure_trigger(src_path, src_code)
+        method_bodies = _extract_procedure_method_bodies(src_code)
+        if not method_bodies:
+            script_lines.extend([
+                f'// {os.path.basename(src_path)}: no executable procedure body detected',
+                '',
+            ])
+            continue
+
+        for method_name, body in method_bodies:
+            translated = _translate_procedure_body_to_js(body, namespace, entity_var="entity")
+            script_lines.extend([
+                f'PROCEDURE_HANDLERS.push({{',
+                f'  entityId: "{entity_identifier}",',
+                f'  trigger: "{trigger}",',
+                f'  source: "{os.path.basename(src_path)}::{method_name}",',
+                f'  run(entity) {{',
+            ])
+            for line in translated:
+                if line.startswith("//"):
+                    script_lines.append(f'    {line}')
+                else:
+                    script_lines.append(f'    {line}')
+            script_lines.extend([
+                '  }',
+                '});',
+                '',
+            ])
+
+    script_lines.extend([
+        'system.runInterval(() => {',
+        '  const overworld = world.getDimension("minecraft:overworld");',
+        '  for (const handler of PROCEDURE_HANDLERS) {',
+        '    try {',
+        '      const entities = overworld.getEntities({ type: handler.entityId });',
+        '      for (const entity of entities) {',
+        '        handler.run(entity);',
+        '      }',
+        '    } catch (error) {',
+        '      console.warn(`procedure bridge failed: ${String(error)}`);',
+        '    }',
+        '  }',
+        '}, 1);',
+        '',
+    ])
+
+    os.makedirs(os.path.join(bp_folder, "scripts"), exist_ok=True)
+    out_path = os.path.join(bp_folder, "scripts", f"{safe_entity}_procedures.js")
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(script_lines))
+
+    main_path = os.path.join(bp_folder, "scripts", "main.js")
+    import_line = f'import "./{os.path.basename(out_path)}";\n'
+    if os.path.exists(main_path):
+        with open(main_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        if os.path.basename(out_path) not in content:
+            with open(main_path, "w", encoding="utf-8") as fh:
+                fh.write(import_line + content)
+    else:
+        with open(main_path, "w", encoding="utf-8") as fh:
+            fh.write(import_line)
+
+    return out_path
+
 def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: dict, geom_file_map: dict, geom_ns_map: dict, anim_key_map: dict, stats: dict):
     try:
         with open(java_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -5553,12 +6124,32 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
     namespace = sanitize_identifier(parts[0]) if parts else "converted"
     entity_name = clean_java_artifact_name(parts[1]) if len(parts) > 1 else clean_java_artifact_name("entity")
     clean_identifier = f"{namespace}:{entity_name}"
-    ai_goals = extract_ai_goals_from_java(java_code)
+    entity_cls_name = extract_class_name(java_code)
+    entity_basename = clean_java_artifact_name(os.path.splitext(os.path.basename(java_path))[0])
+    related_procedure_sources = _collect_entity_procedure_sources(
+        java_code,
+        java_path,
+        clean_identifier,
+        entity_cls_name=entity_cls_name,
+        entity_basename=entity_basename,
+    )
+    merged_java_code = java_code
+    if related_procedure_sources:
+        merged_java_code = java_code + "\n\n" + "\n\n".join(
+            f"// PROCEDURE SOURCE: {os.path.basename(src_path)}\n{src_code}"
+            for src_path, src_code in related_procedure_sources
+        )
+        for _proc_path, _proc_code in related_procedure_sources:
+            try:
+                symbol_table.scan_java_file(_proc_code)
+            except Exception:
+                pass
+    ai_goals = extract_ai_goals_from_java(merged_java_code)
     animations = extract_animations_from_java(java_code, namespace, entity_name)
-    attributes = extract_attributes_from_java(java_code)
-    immunities = extract_damage_immunities_from_java(java_code)
-    bounding_proc = detect_dynamic_bounding_procedure(java_code)
-    despawn_ticks = detect_despawn_ticks(java_code)
+    attributes = extract_attributes_from_java(merged_java_code)
+    immunities = extract_damage_immunities_from_java(merged_java_code)
+    bounding_proc = detect_dynamic_bounding_procedure(merged_java_code)
+    despawn_ticks = detect_despawn_ticks(merged_java_code)
     collision_w, collision_h = 0.6, 1.8
     if bounding_proc:
         collision_w, collision_h = 2.5, 3.0
@@ -5879,7 +6470,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
         comps["minecraft:underwater_movement"] = {"value": round(attributes.get("movement_speed", 0.3) * 0.85, 4)}
     if is_climber:
         comps["minecraft:navigation.climb"] = {}
-    generate_entity_events(bedrock_entity, ai_goals, java_code, namespace, clean_identifier, attributes)
+    generate_entity_events(bedrock_entity, ai_goals, merged_java_code, namespace, clean_identifier, attributes)
     if despawn_ticks is not None and despawn_ticks <= 600:
         bedrock_entity["minecraft:entity"]["components"]["minecraft:timer"] = {
             "looping": False,
@@ -5892,7 +6483,8 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
         "animations_extracted": sorted(list(animations)),
         "immunities_detected": immunities,
         "dynamic_bounding_box_procedure": bounding_proc,
-        "despawn_after_ticks": despawn_ticks
+        "despawn_after_ticks": despawn_ticks,
+        "related_procedures": [os.path.basename(p) for p, _ in related_procedure_sources],
     }
     bedrock_entity["minecraft:entity"]["components"]["_converter_metadata"] = metadata
     def should_loop(anim_name: str) -> bool:
@@ -5930,6 +6522,10 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
     safe_write_json(entity_json_path, bedrock_entity)
 
     stats["converted_entities_bp"].append(entity_json_path)
+    try:
+        _emit_entity_procedure_script(clean_identifier, namespace, related_procedure_sources, BP_FOLDER)
+    except Exception as _proc_emit_err:
+        stats["warnings"].append(f"procedure-script:{java_path}:{_proc_emit_err}")
     java_geom_tuple = find_model_geometry_in_code(java_code)
     java_geom_identifier: Optional[str] = None
     if java_geom_tuple:
@@ -5947,7 +6543,6 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
         elif java_name_clean in geom_file_map:
             java_geom_identifier = geom_file_map[java_name_clean]
 
-    entity_cls_name = extract_class_name(java_code)
     aggressive_tex, aggressive_geom = find_entity_assets_aggressively(
         java_code, entity_basename, namespace, entity_cls=entity_cls_name
     )
@@ -7121,6 +7716,66 @@ def extract_item_tags_from_jar(jar_path: str, namespace: str):
         out_path = os.path.join(out_dir, f"{namespace}_catalog.json")
         safe_write_json(out_path, catalog)
 
+def _find_remapper_candidate(script_dir: str) -> Optional[str]:
+    candidates = []
+    search_roots = [
+        script_dir,
+        os.path.join(script_dir, "tools"),
+    ]
+    for root in search_roots:
+        if not os.path.isdir(root):
+            continue
+        for name in os.listdir(root):
+            low = name.lower()
+            if not low.endswith(".jar"):
+                continue
+            if any(k in low for k in ("remapper", "tinyremapper", "specialsource", "mappings")):
+                candidates.append(os.path.join(root, name))
+    return candidates[0] if candidates else None
+
+def _find_mapping_file(script_dir: str) -> Optional[str]:
+    search_roots = [
+        script_dir,
+        os.path.join(script_dir, "tools"),
+    ]
+    for root in search_roots:
+        if not os.path.isdir(root):
+            continue
+        for name in os.listdir(root):
+            low = name.lower()
+            if low.endswith((".tiny", ".tsrg", ".srg", ".txt", ".map")) and any(k in low for k in ("mcp", "mojang", "yarn", "parchment", "mappings")):
+                return os.path.join(root, name)
+    return None
+
+def _try_remap_jar(input_jar: str, remapped_jar: str) -> Optional[str]:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    remapper = _find_remapper_candidate(script_dir)
+    mappings = _find_mapping_file(script_dir)
+    if not remapper or not mappings:
+        return None
+
+    os.makedirs(os.path.dirname(remapped_jar), exist_ok=True)
+
+    cmd_variants = [
+        ["java", "-jar", remapper, input_jar, remapped_jar, mappings],
+        ["java", "-jar", remapper, input_jar, mappings, remapped_jar],
+    ]
+
+    for cmd in cmd_variants:
+        try:
+            subprocess.run(
+                cmd,
+                cwd=script_dir,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if os.path.exists(remapped_jar):
+                return remapped_jar
+        except Exception:
+            continue
+    return None
+
 def run_class_decompiler(jar_file, output_dir):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     lib_jar = os.path.join(script_dir, "tools", "ClassDecompiler.jar")
@@ -7132,7 +7787,7 @@ def run_class_decompiler(jar_file, output_dir):
     try:
         with zipfile.ZipFile(lib_jar, 'r') as z:
             internal_path = next(
-                (name for name in z.namelist() if "vineflower.jar" in name.lower()), 
+                (name for name in z.namelist() if "vineflower.jar" in name.lower()),
                 None
             )
             if internal_path:
@@ -7142,9 +7797,17 @@ def run_class_decompiler(jar_file, output_dir):
                 _warn("Vineflower jar not found in ClassDecompiler.jar")
                 return None
 
+        working_jar = os.path.abspath(jar_file)
+        remapped_jar = os.path.join(script_dir, ".remap_cache", os.path.basename(jar_file))
+        remapped = _try_remap_jar(working_jar, remapped_jar)
+        if remapped:
+            working_jar = remapped
+        else:
+            _warn("No remapper/mappings found; decompiling original jar and relying on source-level heuristics.")
+
         subprocess.run(
-            ["java", "-jar", os.path.abspath(lib_jar), 
-             os.path.abspath(jar_file), os.path.abspath(output_dir)],
+            ["java", "-jar", os.path.abspath(lib_jar),
+             os.path.abspath(working_jar), os.path.abspath(output_dir)],
             cwd=script_dir,
             check=True,
             stdout=subprocess.DEVNULL,
@@ -7175,7 +7838,7 @@ def main():
         if os.path.exists(extracted_engine):
             os.remove(extracted_engine)
 
-        run_pipeline()
+        run_pipeline(modmorpher_input_folder)
 
     else:
         _warn("Pipeline aborted due to decompiler errors.")
@@ -11011,7 +11674,7 @@ def _enhanced_postpass(namespace: str, java_files: Dict[str, str]) -> None:
         with open(port_notes, 'a', encoding='utf-8') as fh:
             fh.write('\n'.join(notes) + '\n')
 
-def run_pipeline():
+def run_pipeline(source_root: str = "."):
     _orig = _logger._original_print
     jar_path = find_jar_file(".")
     if jar_path:
@@ -11072,7 +11735,8 @@ def run_pipeline():
         "mixins_converted":      [],
     }
     with _logger.phase("Reading Java source", total=0, unit="file", colour="blue"):
-        java_files = read_all_java_files(".")
+        java_files = read_all_java_files(source_root if os.path.exists(source_root) else ".")
+        java_files = deobfuscate_java_sources(java_files, namespace)
         global _ALL_JAVA_FILES
         _ALL_JAVA_FILES = java_files
     with _logger.phase("Pre-scanning registries", total=0, unit="step", colour="blue"):
@@ -11943,7 +12607,7 @@ def _expr_to_js_text(expr: object, symbol_table: Optional[JavaSymbolTable] = Non
     s = s.replace('true', 'true').replace('false', 'false')
     return s
 
-# translate_expression is defined once near the top of this module with full symbol_table support.
+
 
 def _translate_block_stmt_list(stmts, player: str, namespace: str, symbol_table: Optional[JavaSymbolTable]) -> list[str]:
     out: list[str] = []
@@ -12778,7 +13442,7 @@ class JavaSymbolTable:
                 pass
         self._scan_regex(java_code)
 
-# translate_expression is defined once near the top of this module with full symbol_table support.
+
 
 def translate_method_invocation(invocation: object, player: str, namespace: str, symbol_table: JavaSymbolTable) -> Optional[str]:
     member = getattr(invocation, 'member', '')
@@ -13094,7 +13758,7 @@ def _enhanced_postpass(namespace: str, java_files: Dict[str, str]) -> None:
         with open(port_notes, 'a', encoding='utf-8') as fh:
             fh.write('\n'.join(notes) + '\n')
 
-def run_pipeline():
+def run_pipeline(source_root: str = "."):
     _LEGACY_RUN_PIPELINE()
     try:
         java_files = read_all_java_files('.')
