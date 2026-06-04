@@ -12,11 +12,14 @@ import subprocess
 import re
 from typing import Optional, Tuple, Dict, Set, List, Union
 
+DEBUG_MODE = os.getenv("MODMORPHER_DEBUG", "0") == "1"
+
 _REAL_PRINT = builtins.print
 def _silent_print(*args, **kwargs):
     return None
 
-builtins.print = _silent_print
+if not DEBUG_MODE:
+    builtins.print = _silent_print
 
 class _SilentStream:
     def write(self, text):
@@ -25,9 +28,11 @@ class _SilentStream:
     def flush(self):
         return None
 
-sys.stderr = _SilentStream()
+if not DEBUG_MODE:
+    sys.stderr = _SilentStream()
 
-Tool_Version = "1.5.5 'After extensive scientific research, we determined that 200 health is not the same thing as 200 armor.'"
+Tool_Version = "1.5.6 'Mojang! These numbers... What do they mean?!"
+DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
 class _ProgressBar:
@@ -3911,9 +3916,25 @@ def load_animation_keys() -> Dict[str, Set[str]]:
                     keys.add(k)
         result[os.path.splitext(fname)[0].lower()] = keys
     return result
+def _dir_has_java_files(root_dir: str) -> bool:
+    if not root_dir or not os.path.isdir(root_dir):
+        return False
+    for _, _, files in os.walk(root_dir):
+        if any(f.endswith(".java") for f in files):
+            return True
+    return False
+
+def _preferred_java_root(root_dir: str = ".") -> str:
+    deobf_root = os.path.join(OUTPUT_DIR, "deobfuscated_java")
+    if _dir_has_java_files(deobf_root):
+        return deobf_root
+    return root_dir
+
 def read_all_java_files(root_dir=".") -> Dict[str, str]:
     if root_dir == "." and _DEOBFUSCATED_JAVA_FILES:
         return dict(_DEOBFUSCATED_JAVA_FILES)
+
+    root_dir = _preferred_java_root(root_dir)
 
     java_files = {}
     skip_dir = os.path.normpath(OUTPUT_DIR)
@@ -4056,88 +4077,469 @@ def _rewrite_java_identifiers(source: str, rename_map: Dict[str, str]) -> str:
         source = re.sub(rf'\b{re.escape(old_name)}\b', new_name, source)
     return source
 
+
+
+import urllib.request
+import urllib.error
+
+
+_MOJANG_MAPPING_CACHE: Dict[str, Tuple[Dict[str, str], Dict[str, str]]] = {}
+
+
+def detect_minecraft_version(jar_path: Optional[str] = None) -> Optional[str]:
+
+    version_re = re.compile(r'\b(1\.\d{1,2}(?:\.\d{1,2})?)\b')
+
+    def _first_match(text: str) -> Optional[str]:
+        m = version_re.search(text)
+        return m.group(1) if m else None
+
+    if jar_path and os.path.isfile(jar_path):
+        try:
+            with zipfile.ZipFile(jar_path, 'r') as z:
+
+                for entry in z.namelist():
+                    if entry.upper().endswith('MANIFEST.MF'):
+                        manifest = z.read(entry).decode('utf-8', errors='ignore')
+                        for line in manifest.splitlines():
+                            kl = line.lower()
+                            if any(k in kl for k in ('minecraft-version', 'implementation-version',
+                                                       'forge-version', 'fabric-version')):
+                                v = _first_match(line)
+                                if v:
+                                    return v
+
+                for entry in z.namelist():
+                    el = entry.lower()
+                    if el.endswith('mods.toml') or el.endswith('neoforge.mods.toml'):
+                        text = z.read(entry).decode('utf-8', errors='ignore')
+
+                        for pat in [
+                            r'modId\s*=\s*["\']minecraft["\']\s*.*?versionRange\s*=\s*["\']([^"\']+)["\']',
+                            r'minecraft\s*=\s*["\']([^"\']+)["\']',
+                        ]:
+                            m = re.search(pat, text, re.DOTALL | re.IGNORECASE)
+                            if m:
+                                v = _first_match(m.group(1))
+                                if v:
+                                    return v
+
+                for entry in z.namelist():
+                    if entry.lower().endswith('fabric.mod.json'):
+                        data = json.loads(z.read(entry).decode('utf-8', errors='ignore'))
+                        mc = (data.get('depends') or {}).get('minecraft', '')
+                        v = _first_match(str(mc))
+                        if v:
+                            return v
+
+                for entry in z.namelist():
+                    if entry.lower().endswith('quilt.mod.json'):
+                        data = json.loads(z.read(entry).decode('utf-8', errors='ignore'))
+                        mc = (data.get('quilt_loader', {}).get('depends') or [])
+                        for dep in mc:
+                            if isinstance(dep, dict) and dep.get('id') == 'minecraft':
+                                v = _first_match(str(dep.get('versions', '')))
+                                if v:
+                                    return v
+        except Exception:
+            pass
+
+─
+    for root, _, files in os.walk('.'):
+        for fname in files:
+            fpath = os.path.join(root, fname)
+            try:
+                if fname in ('gradle.properties',):
+                    text = open(fpath, encoding='utf-8', errors='ignore').read()
+                    for pat in [
+                        r'minecraft_version\s*=\s*([0-9][^\s#]+)',
+                        r'minecraftVersion\s*=\s*([0-9][^\s#]+)',
+                        r'mc_version\s*=\s*([0-9][^\s#]+)',
+                    ]:
+                        m = re.search(pat, text, re.IGNORECASE)
+                        if m:
+                            v = _first_match(m.group(1))
+                            if v:
+                                return v
+                if fname in ('build.gradle', 'build.gradle.kts'):
+                    text = open(fpath, encoding='utf-8', errors='ignore').read()
+                    for pat in [
+                        r"minecraft\s+['\"]([0-9][^'\"]+)['\"]",
+                        r"mc_version\s*=\s*['\"]([0-9][^'\"]+)['\"]",
+                        r"minecraft_version\s*=\s*['\"]([0-9][^'\"]+)['\"]",
+                    ]:
+                        m = re.search(pat, text, re.IGNORECASE)
+                        if m:
+                            v = _first_match(m.group(1))
+                            if v:
+                                return v
+                if fname in ('mods.toml', 'neoforge.mods.toml'):
+                    text = open(fpath, encoding='utf-8', errors='ignore').read()
+                    for pat in [
+                        r'modId\s*=\s*["\']minecraft["\']\s*.*?versionRange\s*=\s*["\']([^"\']+)["\']',
+                        r'minecraft\s*=\s*["\']([^"\']+)["\']',
+                    ]:
+                        m = re.search(pat, text, re.DOTALL | re.IGNORECASE)
+                        if m:
+                            v = _first_match(m.group(1))
+                            if v:
+                                return v
+                if fname == 'fabric.mod.json':
+                    data = json.load(open(fpath, encoding='utf-8'))
+                    mc = (data.get('depends') or {}).get('minecraft', '')
+                    v = _first_match(str(mc))
+                    if v:
+                        return v
+            except Exception:
+                continue
+    return None
+
+
+
+
+_MOJANG_VERSION_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+_MAPPING_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mapping_cache")
+
+
+def _fetch_url(url: str, timeout: int = 30) -> Optional[bytes]:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ModMorpher/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
+
+def _cached_path(mc_version: str) -> str:
+    os.makedirs(_MAPPING_CACHE_DIR, exist_ok=True)
+    return os.path.join(_MAPPING_CACHE_DIR, f"client_{mc_version}.txt")
+
+
+def download_mojang_mappings(mc_version: str) -> Optional[str]:
+ 
+    cache_file = _cached_path(mc_version)
+    if os.path.isfile(cache_file):
+        try:
+            return open(cache_file, encoding='utf-8', errors='ignore').read()
+        except Exception:
+            pass
+
+   
+    manifest_data = _fetch_url(_MOJANG_VERSION_MANIFEST)
+    if not manifest_data:
+        return None
+    try:
+        manifest = json.loads(manifest_data.decode('utf-8'))
+    except Exception:
+        return None
+
+    version_url = None
+    for entry in manifest.get('versions', []):
+        if entry.get('id') == mc_version:
+            version_url = entry.get('url')
+            break
+    if not version_url:
+   
+        for entry in manifest.get('versions', []):
+            if entry.get('id', '').startswith(mc_version):
+                version_url = entry.get('url')
+                break
+    if not version_url:
+        return None
+
+
+    version_data = _fetch_url(version_url)
+    if not version_data:
+        return None
+    try:
+        version_json = json.loads(version_data.decode('utf-8'))
+    except Exception:
+        return None
+
+    mappings_url = (
+        version_json
+        .get('downloads', {})
+        .get('client_mappings', {})
+        .get('url')
+    )
+    if not mappings_url:
+   
+        return None
+
+    mapping_data = _fetch_url(mappings_url)
+    if not mapping_data:
+        return None
+
+    mapping_text = mapping_data.decode('utf-8', errors='ignore')
+    try:
+        with open(cache_file, 'w', encoding='utf-8') as fh:
+            fh.write(mapping_text)
+    except Exception:
+        pass
+    return mapping_text
+
+
+
+
+def parse_mojang_mappings(mapping_text: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+   
+    field_map: Dict[str, str] = {}
+    method_map: Dict[str, str] = {}
+
+    for line in mapping_text.splitlines():
+        line = line.rstrip()
+        if not line or line.startswith('#'):
+            continue
+
+        if not line.startswith('    '):
+            continue
+
+        stripped = line.strip()
+        if ' -> ' not in stripped:
+            continue
+        readable_side, obf_name = stripped.rsplit(' -> ', 1)
+        obf_name = obf_name.strip()
+
+     
+        readable_side = re.sub(r'^\d+:\d+:', '', readable_side).strip()
+
+        parts = readable_side.split()
+        if len(parts) < 2:
+            continue
+        readable_name_full = parts[1]
+
+        if '(' in readable_name_full:
+
+            readable_name = readable_name_full[:readable_name_full.index('(')]
+        else:
+            readable_name = readable_name_full
+
+        if not obf_name or not readable_name or obf_name == readable_name:
+            continue
+
+        if '(' in readable_name_full:
+          
+            if len(obf_name) <= 3 or re.fullmatch(r'[a-z]{1,3}\d*', obf_name):
+                method_map[obf_name] = readable_name
+        else:
+            if len(obf_name) <= 3 or re.fullmatch(r'[a-z]{1,3}\d*', obf_name):
+                field_map[obf_name] = readable_name
+
+    return field_map, method_map
+
+
+
+_SRG_BUILTIN_REMAP: Dict[str, str] = {
+
+    "m_135353_": "defineId",      "m_135370_": "get",
+    "m_135372_": "define",        "m_135381_": "set",
+    "f_135030_": "STRING",        "f_135035_": "BOOLEAN",
+    "f_135028_": "BYTE",          "f_135029_": "INTEGER",
+    "f_135031_": "FLOAT",         "f_135032_": "OPTIONAL_BLOCK_POS",
+    "f_135033_": "DIRECTION",     "f_135034_": "OPTIONAL_UUID",
+    "f_135036_": "COMPOUND_TAG",  "f_135040_": "POSE",
+
+    "f_19804_": "entityData",     "f_19853_": "level",
+    "f_20919_": "deathTime",      "f_21364_": "noPhysics",
+    "f_20904_": "hurtTime",       "f_20926_": "lastHurt",
+    "f_20909_": "invulnerableTime","f_20907_": "health",
+    "f_20917_": "absorptionAmount","f_21153_": "jumping",
+    "f_21345_": "goalSelector",   "f_21346_": "targetSelector",
+
+    "m_5654_": "getAddEntityPacket","m_5912_": "isSprinting",
+    "m_5993_": "killedEntity",    "m_6075_": "tick",
+    "m_6153_": "tickDeath",       "m_6210_": "checkDespawn",
+    "m_6336_": "getMobType",      "m_6469_": "hurt",
+    "m_6518_": "finalizeSpawn",   "m_6639_": "getAttackReachSqr",
+    "m_6785_": "requiresCustomPersistence",
+    "m_6972_": "getDimensions",   "m_7515_": "getAmbientSound",
+    "m_7640_": "getDirectEntity", "m_7975_": "getHurtSound",
+    "m_5592_": "getDeathSound",   "m_8097_": "defineSynchedData",
+    "m_8099_": "registerGoals",   "m_25352_": "addGoal",
+
+    "m_20185_": "getX",           "m_20186_": "getY",
+    "m_20189_": "getZ",           "m_20388_": "scale",
+    "m_20202_": "setPos",         "m_20219_": "getDeltaMovement",
+    "m_20223_": "setDeltaMovement",
+
+    "m_21226_": "dropExperience", "m_21530_": "xpReward",
+    "m_21552_": "createLivingAttributes",
+    "m_21557_": "setCanPickUpLoot","m_142687_": "remove",
+
+    "m_22268_": "add",
+    "f_22276_": "FOLLOW_RANGE",   "f_22277_": "ARMOR",
+    "f_22278_": "ATTACK_DAMAGE",  "f_22279_": "MOVEMENT_SPEED",
+    "f_22280_": "ATTACK_SPEED",   "f_22281_": "KNOCKBACK_RESISTANCE",
+    "f_22282_": "LUCK",           "f_22284_": "MAX_HEALTH",
+    "f_22285_": "FLYING_SPEED",   "f_22286_": "ARMOR_TOUGHNESS",
+    "f_22287_": "ATTACK_KNOCKBACK",
+
+    "f_19306_": "IN_WALL",        "f_19307_": "CRAMMING",
+    "f_19308_": "IN_FIRE",        "f_19310_": "ON_FIRE",
+    "f_19311_": "LAVA",           "f_19312_": "HOT_FLOOR",
+    "f_19313_": "STUCK",          "f_19314_": "DROWN",
+    "f_19315_": "STARVE",         "f_19316_": "CACTUS",
+    "f_19317_": "FALL",           "f_19319_": "OUT_OF_WORLD",
+    "f_19320_": "GENERIC",        "f_19321_": "MAGIC",
+    "f_19322_": "WITHER",         "f_19323_": "DRAGON_BREATH",
+    "f_19326_": "FREEZE",
+
+    "m_19372_": "isMagic",        "m_19374_": "isExplosion",
+    "m_19376_": "isFire",         "m_19378_": "isProjectile",
+    "m_19380_": "isBypassArmor",  "m_19385_": "getMsgId",
+    "m_19388_": "getEntity",
+
+    "m_7565_": "above",           "m_7566_": "below",
+    "m_7567_": "north",           "m_7568_": "south",
+    "m_7569_": "east",            "m_7570_": "west",
+
+    "m_128366_": "getInt",        "m_128380_": "putInt",
+    "m_128390_": "getFloat",      "m_128393_": "putFloat",
+    "m_128425_": "getBoolean",    "m_128432_": "putBoolean",
+    "m_128369_": "getString",     "m_128419_": "putString",
+    "m_128442_": "contains",      "m_128445_": "remove",
+
+    "m_8950_": "getBlockState",   "m_7702_": "setBlock",
+    "m_6904_": "addFreshEntity",  "m_7918_": "playSound",
+    "m_6552_": "explode",
+
+    "m_6696_": "addAdditionalSaveData",
+    "m_6701_": "readAdditionalSaveData",
+
+    "f_21637_": "UNDEFINED",      "f_21638_": "UNDEAD",
+    "f_21639_": "ARTHROPOD",      "f_21640_": "ILLAGER",
+    "f_21641_": "WATER",
+}
+
+_SRG_PAT = re.compile(r'\b([fm]_\d+_)\b')
+
+
+def _apply_srg_builtin_remap(source: str) -> str:
+
+    return _SRG_PAT.sub(
+        lambda m: _SRG_BUILTIN_REMAP.get(m.group(1), m.group(1)),
+        source,
+    )
+
+ource.
+_MOJ_FIELD_PAT  = re.compile(r'\b([a-z]{1,3}\d*)\b')
+_MOJ_METHOD_PAT = re.compile(r'\b([a-z]{1,3}\d*)\s*\(')
+
+
+def apply_mojang_mappings_to_source(
+    source: str,
+    field_map: Dict[str, str],
+    method_map: Dict[str, str],
+) -> str:
+
+    if not field_map and not method_map:
+        return source
+
+    combined = {}
+    combined.update(field_map)
+    combined.update(method_map)  
+
+    if not combined:
+        return source
+
+    escaped = '|'.join(re.escape(k) for k in sorted(combined, key=len, reverse=True))
+    pat = re.compile(rf'\b({escaped})\b')
+
+    def _replace(m: re.Match) -> str:
+        token = m.group(1)
+
+        return combined.get(token, token)
+
+    return pat.sub(_replace, source)
+
+
+
+_DETECTED_MC_VERSION: Optional[str] = None
+
+
+def _get_or_fetch_mojang_maps(
+    jar_path: Optional[str] = None,
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+  
+    global _DETECTED_MC_VERSION
+
+    mc_version = _DETECTED_MC_VERSION or detect_minecraft_version(jar_path)
+    if mc_version:
+        _DETECTED_MC_VERSION = mc_version
+
+    if not mc_version:
+        return {}, {}
+
+    if mc_version in _MOJANG_MAPPING_CACHE:
+        return _MOJANG_MAPPING_CACHE[mc_version]
+
+    mapping_text = download_mojang_mappings(mc_version)
+    if not mapping_text:
+        _MOJANG_MAPPING_CACHE[mc_version] = ({}, {})
+        return {}, {}
+
+    field_map, method_map = parse_mojang_mappings(mapping_text)
+    _MOJANG_MAPPING_CACHE[mc_version] = (field_map, method_map)
+    return field_map, method_map
+
+
 def deobfuscate_java_sources(java_files: Dict[str, str], namespace: str = "") -> Dict[str, str]:
     global _DEOBFUSCATED_JAVA_FILES, _DEOBFUSCATED_JAVA_PATHS
 
     out_root = os.path.join(OUTPUT_DIR, "deobfuscated_java")
     os.makedirs(out_root, exist_ok=True)
 
+    abs_out_root = os.path.abspath(out_root)
+    input_paths = [os.path.abspath(path) for path in java_files.keys()]
+    if input_paths and all(p.startswith(abs_out_root + os.sep) or p == abs_out_root for p in input_paths):
+        _DEOBFUSCATED_JAVA_FILES = dict(java_files)
+        _DEOBFUSCATED_JAVA_PATHS = {path: path for path in java_files}
+        return dict(java_files)
+
+    java_files = {path: _apply_srg_builtin_remap(code)
+                  for path, code in java_files.items()}
+
+    try:
+        jar_path = next(
+            (os.path.abspath(f) for f in os.listdir('.')
+             if f.endswith('.jar') and os.path.isfile(f)),
+            None,
+        )
+        field_map, method_map = _get_or_fetch_mojang_maps(jar_path)
+        if field_map or method_map:
+            java_files = {
+                path: apply_mojang_mappings_to_source(code, field_map, method_map)
+                for path, code in java_files.items()
+            }
+    except Exception:
+        pass 
+
     class_name_map: Dict[str, str] = {}
     path_to_class: Dict[str, str] = {}
-    path_to_role: Dict[str, str] = {}
     used_class_names: Set[str] = set()
 
     for path, code in java_files.items():
         cls_name = extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
         path_to_class[path] = cls_name
-        role = _infer_java_class_role(code, path, cls_name)
-        path_to_role[path] = role
-
-        stem = clean_java_artifact_name(cls_name) or clean_java_artifact_name(os.path.splitext(os.path.basename(path))[0])
-        if not stem:
-            stem = role
-
-        if _is_probably_obfuscated_java_name(cls_name) or len(stem) <= 2 or stem in {'class', 'entity', 'model', 'renderer', 'screen'}:
-            base = f"{role}_{stem or 'class'}"
-        else:
-            base = stem
-
-        class_name_map[cls_name] = _unique_java_name(base, used_class_names)
+        class_name_map[cls_name] = cls_name
 
     rewritten: Dict[str, str] = {}
     rewritten_paths: Dict[str, str] = {}
 
     for path, code in java_files.items():
         cls_name = path_to_class.get(path) or extract_class_name(code) or os.path.splitext(os.path.basename(path))[0]
-        role = path_to_role.get(path, 'class')
         rename_map: Dict[str, str] = {}
 
-        new_class_name = class_name_map.get(cls_name)
-        if new_class_name and new_class_name != cls_name:
-            rename_map[cls_name] = new_class_name
+        new_class_name = class_name_map.get(cls_name, cls_name)
 
         ast = JavaAST(code)
         ast._parse()
         tree = getattr(ast, '_tree', None)
-
         if tree is not None:
             try:
                 for _, node in tree.filter(javalang.tree.ClassDeclaration):
                     if node.name != cls_name:
                         continue
-
-                    method_index = 1
-                    field_index = 1
-                    for method in (node.methods or []):
-                        old_name = getattr(method, 'name', '')
-                        ret_type = ''
-                        if getattr(method, 'return_type', None) is not None and hasattr(method.return_type, 'name'):
-                            ret_type = method.return_type.name
-                        params = []
-                        for p in (getattr(method, 'parameters', None) or []):
-                            if hasattr(p.type, 'name'):
-                                params.append(p.type.name)
-                            else:
-                                params.append(str(p.type))
-
-                        semantic = _semantic_member_name(role, 'method', old_name, ret_type, params, code)
-                        if semantic:
-                            new_name = semantic
-                            if new_name in rename_map.values():
-                                new_name = f"{semantic}_{method_index}"
-                            rename_map[old_name] = new_name
-                            method_index += 1
-
-                    for field in (node.fields or []):
-                        for decl in (getattr(field, 'declarators', None) or []):
-                            old_name = getattr(decl, 'name', '')
-                            semantic = _semantic_member_name(role, 'field', old_name, '', None, code)
-                            if semantic:
-                                new_name = semantic
-                                if new_name in rename_map.values():
-                                    new_name = f"{semantic}_{field_index}"
-                                rename_map[old_name] = new_name
-                                field_index += 1
                     break
             except Exception:
                 pass
@@ -4148,7 +4550,8 @@ def deobfuscate_java_sources(java_files: Dict[str, str], namespace: str = "") ->
         rel_dir = os.path.dirname(rel_path)
         target_dir = os.path.join(out_root, rel_dir)
         os.makedirs(target_dir, exist_ok=True)
-        target_name = f"{sanitize_identifier(new_class_name or cls_name)}.java"
+        safe_name = sanitize_identifier(new_class_name or cls_name) or sanitize_identifier(os.path.splitext(os.path.basename(path))[0]) or "Class"
+        target_name = f"{safe_name}.java"
         target_path = os.path.join(target_dir, target_name)
         try:
             with open(target_path, 'w', encoding='utf-8') as fh:
@@ -7829,19 +8232,22 @@ def main():
         _warn("No target jar file found.")
         return
 
+
+    global _DETECTED_MC_VERSION
+    _DETECTED_MC_VERSION = detect_minecraft_version(target_jar)
+
     modmorpher_input_folder = f"src_{os.path.splitext(target_jar)[0]}"
 
     extracted_engine = run_class_decompiler(target_jar, modmorpher_input_folder)
 
     if extracted_engine:
-
         if os.path.exists(extracted_engine):
             os.remove(extracted_engine)
-
-        run_pipeline(modmorpher_input_folder)
-
     else:
-        _warn("Pipeline aborted due to decompiler errors.")
+        _warn("Decompiler did not complete cleanly; attempting pipeline on any available sources.")
+
+    source_root = modmorpher_input_folder if os.path.isdir(modmorpher_input_folder) else "."
+    run_pipeline(source_root)
 def find_best_texture_match(safe_name: str, subfolder: str) -> str:
     tex_dir = os.path.join(RP_FOLDER, "textures", subfolder)
     if not os.path.isdir(tex_dir):
@@ -11894,6 +12300,15 @@ def run_pipeline(source_root: str = "."):
     feat_count  = len(os.listdir(os.path.join(BP_FOLDER, "features"))) if os.path.isdir(os.path.join(BP_FOLDER, "features")) else 0
     _orig("")
     _orig("")
+
+    deobf_dir = os.path.join("Bedrock_Pack", "deobfuscated_java")
+    deobf_map = os.path.join("Bedrock_Pack", "deobfuscated_java_map.json")
+    for cleanup_path in (deobf_dir, deobf_map):
+        if os.path.isdir(cleanup_path):
+            shutil.rmtree(cleanup_path, ignore_errors=True)
+        elif os.path.isfile(cleanup_path):
+            os.remove(cleanup_path)
+
     shutil.make_archive("Bedrock_Pack", "zip", "Bedrock_Pack")
     shutil.move("Bedrock_Pack.zip", "Bedrock_Pack.mcaddon")
     current_dir = os.getcwd()
@@ -11904,6 +12319,18 @@ def run_pipeline(source_root: str = "."):
                 shutil.rmtree(item)
             except Exception as e:
                 _warn(f"Failed to delete {item}: {e}")
+
+    for cleanup_path in (deobf_dir, deobf_map):
+        if os.path.isdir(cleanup_path):
+            try:
+                shutil.rmtree(cleanup_path, ignore_errors=True)
+            except Exception as e:
+                _warn(f"Failed to delete {cleanup_path}: {e}")
+        elif os.path.isfile(cleanup_path):
+            try:
+                os.remove(cleanup_path)
+            except Exception as e:
+                _warn(f"Failed to delete {cleanup_path}: {e}")
 Tool_Version = "1.5.0-upgraded"
 
 def _strip_java_comments(src: str) -> str:
@@ -13759,13 +14186,25 @@ def _enhanced_postpass(namespace: str, java_files: Dict[str, str]) -> None:
             fh.write('\n'.join(notes) + '\n')
 
 def run_pipeline(source_root: str = "."):
-    _LEGACY_RUN_PIPELINE()
+    _LEGACY_RUN_PIPELINE(source_root)
     try:
+  
         java_files = read_all_java_files('.')
         namespace = detect_mod_id(java_files) if 'detect_mod_id' in globals() else None
         if not namespace:
             namespace = sanitize_identifier(os.path.basename(os.getcwd())) or 'converted'
+   
+        global _DEOBFUSCATED_JAVA_FILES
+        if not _DEOBFUSCATED_JAVA_FILES and java_files:
+            java_files = deobfuscate_java_sources(java_files, namespace)
+            global _ALL_JAVA_FILES
+            _ALL_JAVA_FILES = java_files
         _enhanced_postpass(namespace, java_files)
+    except Exception as e:
+        try:
+            log_critical_failure(f'Enhanced postpass failed: {e}')
+        except Exception:
+            pass
     except Exception as e:
         try:
             log_critical_failure(f'Enhanced postpass failed: {e}')
