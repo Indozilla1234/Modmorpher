@@ -31,7 +31,7 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.5.6 'Mojang! These numbers... What do they mean?!"
+Tool_Version = "1.5.6.1 'This is Sparta!"
 DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
@@ -4144,7 +4144,6 @@ def detect_minecraft_version(jar_path: Optional[str] = None) -> Optional[str]:
         except Exception:
             pass
 
-─
     for root, _, files in os.walk('.'):
         for fname in files:
             fpath = os.path.join(root, fname)
@@ -4421,7 +4420,6 @@ def _apply_srg_builtin_remap(source: str) -> str:
         source,
     )
 
-ource.
 _MOJ_FIELD_PAT  = re.compile(r'\b([a-z]{1,3}\d*)\b')
 _MOJ_METHOD_PAT = re.compile(r'\b([a-z]{1,3}\d*)\s*\(')
 
