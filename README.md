@@ -58,17 +58,12 @@ There will also be a `Bedrock_Pack/` folder with the raw pack structure if you w
 
 ---
 
-## please don’t
-- use this to rip/redistribute paid or Marketplace content(IDK HOW YOU WOULD EVEN)
-- convert mods you don’t own or don’t have permission to convert
-- expect it to bypass DRM (it doesn’t, and can't)
 
----
 
 ## why the license stuff is here
-This project is meant to help mod creators & players, not to wreck people’s work.
-If you’re converting someone else’s mod, make sure you have permission.
-If it’s paid content, don’t.
+This project is meant to help mod creators & players, not to pirate people’s work.
+If you’re converting someone else’s ARR or non-permissive mod, make sure you have permission.
+
 
 ---
 
