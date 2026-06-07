@@ -31,7 +31,7 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.5.6.1 'This is Sparta!"
+Tool_Version = "1.5.6.2 'solving security and quality issues D:<'"
 DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
@@ -5674,17 +5674,17 @@ def extract_block_properties_from_java(java_code: str):
     if m4:
         try: props["friction"] = float(m4.group(1))
         except Exception: pass
-    m_rn = re.search(r'setRegistryName\s*\(\s*["\']([a-z0-9_:-]+)["\']', java_code, re.I)
+    m_rn = re.search(r'setRegistryName\s*\(\s*["\']([-a-z0-9_:]+)["\']', java_code, re.I)
     if m_rn:
         props["texture_hint"] = m_rn.group(1).split(":")[-1]
     else:
-        m_rl = re.search(r'new\s+ResourceLocation\s*\(\s*["\']([a-z0-9_:-]+)["\']', java_code, re.I)
+        m_rl = re.search(r'new\s+ResourceLocation\s*\(\s*["\']([-a-z0-9_:]+)["\']', java_code, re.I)
         if m_rl:
             props["texture_hint"] = m_rl.group(1).split(":")[-1]
-    m6 = re.search(r'getLootTable\(\)\s*.*?["\']([a-z0-9_:-/]+)["\']', java_code, re.I | re.DOTALL)
+    m6 = re.search(r'getLootTable\(\)\s*.*?["\']([-a-z0-9_:/]+)["\']', java_code, re.I | re.DOTALL)
     if m6:
         props["loot_table"] = m6.group(1)
-    m7 = re.search(r'lootTable\(\s*["\']([a-z0-9_:-/]+)["\']', java_code, re.I)
+    m7 = re.search(r'lootTable\(\s*["\']([-a-z0-9_:/]+)["\']', java_code, re.I)
     if m7:
         props["loot_table"] = m7.group(1)
     if re.search(r'\.noOcclusion\(\)|noCollission\(\)|noOcclusionBlock\(\)', java_code):
@@ -5767,8 +5767,8 @@ def extract_item_properties_from_java(java_code: str):
             try: props["durability"] = int(m.group(1)); break
             except Exception: pass
     for pat in [
-        r'setRegistryName\s*\(\s*["\']([a-z0-9_:-]+)["\']',
-        r'new\s+ResourceLocation\s*\(\s*["\']([a-z0-9_:-]+)["\']\s*\)',
+        r'setRegistryName\s*\(\s*["\']([-a-z0-9_:]+)["\']',
+        r'new\s+ResourceLocation\s*\(\s*["\']([-a-z0-9_:]+)["\']\s*\)',
         r'ResourceLocation\s*\(\s*["\'][^"\']+["\']\s*,\s*["\']([a-z0-9_/:-]+)["\']',
     ]:
         m = re.search(pat, java_code, re.I)
@@ -6031,7 +6031,7 @@ def extract_entity_texture_hint(java_code: str, entity_basename: Optional[str] =
         if is_probable_texture(candidate, entity_basename):
             return candidate
     for m in re.finditer(
-        r'new\s+ResourceLocation\s*\(\s*["\']([a-z0-9_:-]+)["\']\s*,\s*["\']([^"\']+)["\']\s*\)',
+        r'new\s+ResourceLocation\s*\(\s*["\']([-a-z0-9_:]+)["\']\s*,\s*["\']([^"\']+)["\']\s*\)',
         java_code, re.IGNORECASE
     ):
         candidate = f"{m.group(1)}:{m.group(2)}"
@@ -10863,7 +10863,7 @@ def build_entity_registry(java_files: dict, namespace: str) -> dict:
             registry[m.group(1)] = f"{namespace}:{m.group(2)}"
         cls_name = extract_class_name(code)
         if cls_name:
-            m = re.search(r'setRegistryName\s*\(\s*["\']([a-z0-9_:-]+)["\']', code)
+            m = re.search(r'setRegistryName\s*\(\s*["\']([-a-z0-9_:]+)["\']', code)
             if m:
                 raw = m.group(1)
                 registry[cls_name] = raw if ":" in raw else f"{namespace}:{raw}"
@@ -11784,10 +11784,13 @@ def _extract_annotated_methods(code: str) -> list[dict]:
     cleaned = _strip_java_comments(code or '')
     results: list[dict] = []
     pat = re.compile(
-        r'(?P<ann>(?:\s*@\w+(?:\([^)]*\))?\s*)+)' \
-        r'(?P<sig>(?:public|protected|private|static|final|native|synchronized|abstract|default|\s|@\w+(?:\([^)]*\))?\s*)+' \
-        r'(?P<rettype>[\w<>,\[\].?\s]+?)\s+(?P<name>\w+)\s*\((?P<params>[^)]*)\)\s*(?:throws\s+[^{]+)?\{)',
-        re.DOTALL,
+        r'(?P<ann>(?:\s*@\w+(?:\([^)]*\))?\s*)+)'
+        r'(?P<sig>'
+        r'(?:(?:public|protected|private|static|final|native|synchronized|abstract|default)\s+)+'
+        r'(?:@\w+(?:\([^)]*\))?\s+)*'
+        r'(?P<rettype>[\w<>,\[\].?]+(?:\[\])*)\s+'
+        r'(?P<name>\w+)\s*\((?P<params>[^)]*)\)\s*(?:throws\s+[\w.,\s]+)?\{)',
+        re.MULTILINE,
     )
     for m in pat.finditer(cleaned):
         sig = m.group('sig')
@@ -12216,7 +12219,7 @@ def run_pipeline(source_root: str = "."):
                     else:
                         reg_name = None
                         for reg_pat in [
-                            r'setRegistryName\s*\(\s*["\']([a-z0-9_:-]+)["\']',
+                            r'setRegistryName\s*\(\s*["\']([-a-z0-9_:]+)["\']',
                             r'\.register\s*\(\s*["\']([a-z0-9_]+)["\']\s*,\s*[^;]*?' + re.escape(cls or "") + r'::new',
                             r'EntityType\.Builder[^;]*\.build\s*\(\s*["\']([a-z0-9_]+)["\']',
                         ]:
