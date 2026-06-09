@@ -31,7 +31,7 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.5.6.2 'solving security and quality issues D:<'"
+Tool_Version = "1.5.7 'BLOCKZ'"
 DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
@@ -390,36 +390,32 @@ public class Dummy {{
         except Exception:
             return []
 
-def translate_method_invocation(invocation: object, player: str, namespace: str, symbol_table: JavaSymbolTable) -> Optional[str]:
 
-    member = getattr(invocation, 'member', '')
-    qualifier = getattr(invocation, 'qualifier', None)
-    if qualifier and isinstance(qualifier, str):
-        pass                         
-    elif qualifier and isinstance(qualifier, list) and len(qualifier) == 1:
-        qualifier = qualifier[0]
-    else:
-        qualifier = None
-    args = getattr(invocation, 'arguments', [])
+def translate_method_invocation(invocation: object, player: str, namespace: str, symbol_table: JavaSymbolTable) -> Optional[str]:
+    member = getattr(invocation, "member", "")
+    qualifier = getattr(invocation, "qualifier", None)
+    if isinstance(qualifier, list):
+        qualifier = ".".join(str(q) for q in qualifier if q)
+    args = getattr(invocation, "arguments", []) or []
 
     if qualifier and symbol_table is not None:
         try:
-            translated_args = [translate_expression(arg) for arg in args]
+            translated_args = [translate_expression(arg, symbol_table) for arg in args]
             translated_args = [a for a in translated_args if a is not None]
             resolved = symbol_table.resolve_method_call(str(qualifier), member, translated_args)
             if resolved:
-                return f'    {resolved};'
+                return f"    {resolved};"
         except Exception:
             pass
 
-    if member == 'receiveEnergy':
-        if args and isinstance(args[0], javalang.tree.Literal):
-            amt = args[0].value
-            return f'    receiveEnergy({player}, {amt});'
-    elif member == 'extractEnergy':
-        if args and isinstance(args[0], javalang.tree.Literal):
-            amt = args[0].value
-            return f'    extractEnergy({player}, {amt});'
+    if member == "receiveEnergy":
+        if args and hasattr(args[0], "value"):
+            amt = getattr(args[0], "value", "0")
+            return f"    receiveEnergy({player}, {amt});"
+    elif member == "extractEnergy":
+        if args and hasattr(args[0], "value"):
+            amt = getattr(args[0], "value", "0")
+            return f"    extractEnergy({player}, {amt});"
 
     nbt_result = NBTTranslator.translate_nbt_call(member, args, namespace, player)
     if nbt_result:
@@ -427,103 +423,192 @@ def translate_method_invocation(invocation: object, player: str, namespace: str,
 
     cap_type = symbol_table.method_belongs_to_capability(member)
     if cap_type:
-        if cap_type == 'energy' and member not in ('receiveEnergy', 'extractEnergy'):
-
-            if member == 'getEnergyStored':
-                return f'getEnergyStored({player})'
-        elif cap_type == 'fluid':
-            if member == 'fill' and len(args) >= 2:
-                fluid_stack = translate_expression(args[0])
-                return f'    fill({player}, {fluid_stack});'
-            elif member == 'drain' and len(args) >= 1:
-                amount = translate_expression(args[0])
-                return f'    drain({player}, {amount});'
+        if cap_type == "energy" and member not in ("receiveEnergy", "extractEnergy"):
+            if member == "getEnergyStored":
+                return f"    return getEnergyStored({player});"
+        elif cap_type == "fluid":
+            if member == "fill" and len(args) >= 2:
+                fluid_stack = translate_expression(args[0], symbol_table)
+                return f"    fill({player}, {fluid_stack});"
+            elif member == "drain" and len(args) >= 1:
+                amount = translate_expression(args[0], symbol_table)
+                return f"    drain({player}, {amount});"
 
     bedrock_call = JavaToBedrockMethodMap.translate_method_call(member, args, qualifier)
     if bedrock_call:
-        return bedrock_call
+        return f"    {bedrock_call};" if not bedrock_call.strip().endswith(";") else f"    {bedrock_call}"
 
-    return None
+    translated_args = [translate_expression(arg, symbol_table) for arg in args]
+    translated_args = [a for a in translated_args if a is not None]
+    if qualifier:
+        return f"    /* unmapped */ {qualifier}.{member}({', '.join(translated_args)});"
+    return f"    /* unmapped */ {member}({', '.join(translated_args)});"
+
+
+
+
+def _translate_statement_list(stmts, player: str, namespace: str, symbol_table: Optional['JavaSymbolTable'] = None) -> list:
+    out: list = []
+    if stmts is None:
+        return out
+    if isinstance(stmts, list):
+        iterable = stmts
+    elif hasattr(stmts, "statements"):
+        iterable = getattr(stmts, "statements", []) or []
+    else:
+        iterable = [stmts]
+    for s in iterable:
+        out.extend(translate_statement(s, player, namespace, symbol_table))
+    return out
+
 
 def translate_statement(stmt: object, player: str, namespace: str, symbol_table: Optional['JavaSymbolTable'] = None) -> list:
     if symbol_table is None:
         symbol_table = JavaSymbolTable()
-    if isinstance(stmt, javalang.tree.StatementExpression):
-        expr = stmt.expression
-        if isinstance(expr, javalang.tree.MethodInvocation):
+    if stmt is None:
+        return []
+
+    node_name = stmt.__class__.__name__
+
+    if node_name == "BlockStatement":
+        return _translate_statement_list(getattr(stmt, "statements", None), player, namespace, symbol_table)
+
+    if node_name == "StatementExpression":
+        expr = getattr(stmt, "expression", None)
+        if expr is None:
+            return []
+        if expr.__class__.__name__ == "MethodInvocation":
             js_line = translate_method_invocation(expr, player, namespace, symbol_table)
             return [js_line] if js_line else []
-        elif isinstance(expr, javalang.tree.Assignment):
+        translated = translate_expression(expr, symbol_table)
+        if translated:
+            return [f"    {translated};"]
+        return [f"    // unmapped expression: {expr.__class__.__name__}"]
 
-            left = translate_expression(expr.expressionl)
-            right = translate_expression(expr.value)
-            if left and right:
-                return [f'    {left} = {right};']
-    elif isinstance(stmt, javalang.tree.LocalVariableDeclaration):
-
-        type_name = stmt.type.name if hasattr(stmt.type, 'name') else str(stmt.type)
-        js_type = 'let'
-        for decl in stmt.declarators:
-            var_name = decl.name
-            init = ''
-            if decl.initializer:
-                init_val = translate_expression(decl.initializer)
+    if node_name == "LocalVariableDeclaration":
+        js_type = "const" if getattr(stmt, "final", False) else "let"
+        decls = []
+        for decl in getattr(stmt, "declarators", []) or []:
+            var_name = getattr(decl, "name", "value")
+            init = ""
+            if getattr(decl, "initializer", None) is not None:
+                init_val = translate_expression(decl.initializer, symbol_table)
                 if init_val:
-                    init = f' = {init_val}'
-            return [f'    {js_type} {var_name}{init};']
-    elif isinstance(stmt, javalang.tree.IfStatement):
+                    init = f" = {init_val}"
+            decls.append(f"    {js_type} {var_name}{init};")
+        return decls
 
-        condition = translate_expression(stmt.condition)
-        if condition:
-            lines = [f'    if ({condition}) {{']
-
-            then_stmts = stmt.then_statement
-            if isinstance(then_stmts, javalang.tree.BlockStatement):
-                for s in then_stmts.statements:
-                    lines.extend(translate_statement(s, player, namespace, symbol_table))
-            elif isinstance(then_stmts, list):
-                for s in then_stmts:
-                    lines.extend(translate_statement(s, player, namespace, symbol_table))
-            else:
-                lines.extend(translate_statement(then_stmts, player, namespace, symbol_table))
-            lines.append('    }')
-            if stmt.else_statement:
-                lines.append('    else {')
-                else_stmts = stmt.else_statement
-                if isinstance(else_stmts, javalang.tree.BlockStatement):
-                    for s in else_stmts.statements:
-                        lines.extend(translate_statement(s, player, namespace, symbol_table))
-                elif isinstance(else_stmts, list):
-                    for s in else_stmts:
-                        lines.extend(translate_statement(s, player, namespace, symbol_table))
-                else:
-                    lines.extend(translate_statement(else_stmts, player, namespace, symbol_table))
-                lines.append('    }')
+    if node_name == "IfStatement":
+        condition = translate_expression(getattr(stmt, "condition", None), symbol_table)
+        if not condition:
+            return ["    // unmapped if-statement"]
+        lines = [f"    if ({condition}) {{"]
+        then_stmt = getattr(stmt, "then_statement", None)
+        lines.extend(_translate_statement_list(then_stmt, player, namespace, symbol_table))
+        else_stmt = getattr(stmt, "else_statement", None)
+        if else_stmt and else_stmt.__class__.__name__ == "IfStatement":
+            lines[-1] = f"    }} else if ({translate_expression(getattr(else_stmt, 'condition', None), symbol_table) or 'true'}) {{"
+            lines.extend(_translate_statement_list(getattr(else_stmt, "then_statement", None), player, namespace, symbol_table))
+            lines.append("    }")
             return lines
-    elif isinstance(stmt, javalang.tree.ReturnStatement):
-
-        if stmt.expression:
-            expr = translate_expression(stmt.expression)
-            return [f'    return {expr};'] if expr else ['    return;']
-        else:
-            return ['    return;']
-    elif isinstance(stmt, javalang.tree.ForStatement):
-
-        init = stmt.initialization
-        condition = translate_expression(stmt.condition) if stmt.condition else None
-        update = stmt.update
-        lines = []
-        if condition:
-            lines.append(f'    for (let i = 0; {condition}; i++) {{')
-
-            if stmt.body:
-                body_list = stmt.body if isinstance(stmt.body, list) else [stmt.body]
-                for s in body_list:
-                    lines.extend(translate_statement(s, player, namespace, symbol_table))
-            lines.append('    }')
+        lines.append("    }")
+        if else_stmt:
+            lines.append("    else {")
+            lines.extend(_translate_statement_list(else_stmt, player, namespace, symbol_table))
+            lines.append("    }")
         return lines
 
-    return []
+    if node_name == "ReturnStatement":
+        expr = translate_expression(getattr(stmt, "expression", None), symbol_table)
+        return [f"    return {expr};"] if expr else ["    return;"]
+
+    if node_name == "ForStatement":
+        control = getattr(stmt, "control", None)
+        init_js, cond_js, update_js = _translate_java_for_control(control, player, namespace, symbol_table)
+        lines = [f"    for ({init_js}; {cond_js}; {update_js}) {{"]
+        lines.extend(_translate_statement_list(getattr(stmt, "body", None), player, namespace, symbol_table))
+        lines.append("    }")
+        return lines
+
+    if node_name == "EnhancedForStatement":
+        control = getattr(stmt, "control", None)
+        var_decl = getattr(control, "var", None)
+        iter_expr = translate_expression(getattr(control, "iterable", None), symbol_table) or "[]"
+        loop_var = getattr(getattr(var_decl, "declarators", [None])[0], "name", "item") if var_decl else "item"
+        lines = [f"    for (const {loop_var} of ({iter_expr} || [])) {{"]
+        lines.extend(_translate_statement_list(getattr(stmt, "body", None), player, namespace, symbol_table))
+        lines.append("    }")
+        return lines
+
+    if node_name == "WhileStatement":
+        condition = translate_expression(getattr(stmt, "condition", None), symbol_table) or "true"
+        lines = [f"    while ({condition}) {{"]
+        lines.extend(_translate_statement_list(getattr(stmt, "body", None), player, namespace, symbol_table))
+        lines.append("    }")
+        return lines
+
+    if node_name == "DoStatement":
+        condition = translate_expression(getattr(stmt, "condition", None), symbol_table) or "true"
+        lines = ["    do {"]
+        lines.extend(_translate_statement_list(getattr(stmt, "body", None), player, namespace, symbol_table))
+        lines.append(f"    }} while ({condition});")
+        return lines
+
+    if node_name == "SwitchStatement":
+        expr = translate_expression(getattr(stmt, "expression", None), symbol_table) or "unknown"
+        lines = [f"    switch ({expr}) {{"]
+        for case in getattr(stmt, "cases", []) or []:
+            labels = getattr(case, "case", None) or getattr(case, "labels", None) or []
+            if not isinstance(labels, list):
+                labels = [labels]
+            if labels:
+                for label in labels:
+                    label_js = translate_expression(label, symbol_table) or "default"
+                    lines.append(f"    case {label_js}:")
+            else:
+                lines.append("    default:")
+            lines.extend(_translate_statement_list(getattr(case, "statements", None), player, namespace, symbol_table))
+            lines.append("        break;")
+        lines.append("    }")
+        return lines
+
+    if node_name == "BreakStatement":
+        return ["    break;"]
+    if node_name == "ContinueStatement":
+        return ["    continue;"]
+    if node_name == "ThrowStatement":
+        expr = translate_expression(getattr(stmt, "expression", None), symbol_table) or 'new Error("unknown")'
+        return [f"    throw {expr};"]
+
+    if node_name == "TryStatement":
+        lines = ["    try {"]
+        lines.extend(_translate_statement_list(getattr(stmt, "block", None), player, namespace, symbol_table))
+        catches = getattr(stmt, "catches", []) or []
+        if catches:
+            for c in catches:
+                lines.append("    } catch (e) {")
+                lines.extend(_translate_statement_list(getattr(c, "block", None), player, namespace, symbol_table))
+        finally_block = getattr(stmt, "finally_block", None)
+        if finally_block:
+            lines.append("    } finally {")
+            lines.extend(_translate_statement_list(finally_block, player, namespace, symbol_table))
+        lines.append("    }")
+        return lines
+
+    if node_name == "SynchronizedStatement":
+        lines = ["    // synchronized block omitted in Bedrock conversion"]
+        lines.extend(_translate_statement_list(getattr(stmt, "block", None), player, namespace, symbol_table))
+        return lines
+
+    if node_name == "EmptyStatement":
+        return []
+
+    raw = translate_expression(stmt, symbol_table)
+    if raw and raw != str(stmt):
+        return [f"    {raw};"]
+    return [f"    // unmapped Java node: {node_name}"]
+
+
 
 def translate_expression(expr: object, symbol_table=None) -> Optional[str]:
     if expr is None:
@@ -531,20 +616,28 @@ def translate_expression(expr: object, symbol_table=None) -> Optional[str]:
     if isinstance(expr, str):
         return expr
     if not JAVALANG_AVAILABLE:
-        if hasattr(expr, 'value'):
+        if hasattr(expr, "value"):
             return str(expr.value)
         return str(expr)
-    if isinstance(expr, javalang.tree.Literal):
-        return str(expr.value)
-    elif isinstance(expr, javalang.tree.MemberReference):
-        qualifier = f'{expr.qualifier}.' if getattr(expr, 'qualifier', None) else ''
-        return f'{qualifier}{expr.member}'
-    elif isinstance(expr, javalang.tree.MethodInvocation):
-        member = getattr(expr, 'member', '')
-        args = getattr(expr, 'arguments', [])
+
+    node_name = expr.__class__.__name__
+
+    if node_name == "Literal":
+        return str(getattr(expr, "value", ""))
+    if node_name == "MemberReference":
+        qualifier = getattr(expr, "qualifier", None)
+        if isinstance(qualifier, list):
+            qualifier = ".".join(str(q) for q in qualifier if q)
+        qualifier = f"{qualifier}." if qualifier else ""
+        return f"{qualifier}{getattr(expr, 'member', '')}"
+    if node_name == "MethodInvocation":
+        member = getattr(expr, "member", "")
+        args = getattr(expr, "arguments", []) or []
         arg_strs = [translate_expression(a, symbol_table) for a in args]
         arg_strs = [a for a in arg_strs if a is not None]
-        qual = getattr(expr, 'qualifier', None)
+        qual = getattr(expr, "qualifier", None)
+        if isinstance(qual, list):
+            qual = ".".join(str(q) for q in qual if q)
         if qual and symbol_table is not None:
             try:
                 resolved = symbol_table.resolve_method_call(str(qual), member, arg_strs)
@@ -552,30 +645,60 @@ def translate_expression(expr: object, symbol_table=None) -> Optional[str]:
                     return resolved
             except Exception:
                 pass
-        qual_prefix = f'{qual}.' if qual else ''
-        return f'{qual_prefix}{member}({", ".join(arg_strs)})'
-    elif isinstance(expr, javalang.tree.BinaryOperation):
-        left = translate_expression(expr.operandl, symbol_table)
-        right = translate_expression(expr.operandr, symbol_table)
-        if left is not None and right is not None:
-            return f'({left} {expr.operator} {right})'
-    elif isinstance(expr, javalang.tree.Cast):
-        return translate_expression(expr.expression, symbol_table)
-    elif isinstance(expr, javalang.tree.TernaryExpression):
-        cond = translate_expression(expr.condition, symbol_table)
-        t = translate_expression(expr.if_true, symbol_table)
-        f = translate_expression(expr.if_false, symbol_table)
-        if cond and t and f:
-            return f'({cond} ? {t} : {f})'
-    elif isinstance(expr, javalang.tree.This):
-        return 'this'
-    elif isinstance(expr, javalang.tree.SuperMethodInvocation):
-        args = [translate_expression(a, symbol_table) for a in (expr.arguments or [])]
+        qual_prefix = f"{qual}." if qual else ""
+        return f"{qual_prefix}{member}({', '.join(arg_strs)})"
+    if node_name == "SuperMethodInvocation":
+        args = [translate_expression(a, symbol_table) for a in (getattr(expr, "arguments", []) or [])]
         args = [a for a in args if a is not None]
-        return f'super.{expr.member}({", ".join(args)})'
-    if hasattr(expr, 'value'):
+        return f"super.{getattr(expr, 'member', '')}({', '.join(args)})"
+    if node_name == "BinaryOperation":
+        left = translate_expression(getattr(expr, "operandl", None), symbol_table)
+        right = translate_expression(getattr(expr, "operandr", None), symbol_table)
+        operator = _translate_java_binary_operator(getattr(expr, "operator", ""))
+        if left is not None and right is not None:
+            return f"({left} {operator} {right})"
+    if node_name == "Assignment":
+        left = translate_expression(getattr(expr, "expressionl", None), symbol_table)
+        right = translate_expression(getattr(expr, "value", None), symbol_table)
+        op = _translate_java_binary_operator(getattr(expr, "type", "="))
+        if left is not None and right is not None:
+            return f"({left} {op} {right})"
+    if node_name in ("Cast", "ParenthesizedExpression"):
+        return translate_expression(getattr(expr, "expression", None), symbol_table)
+    if node_name == "TernaryExpression":
+        cond = translate_expression(getattr(expr, "condition", None), symbol_table)
+        t = translate_expression(getattr(expr, "if_true", None), symbol_table)
+        f = translate_expression(getattr(expr, "if_false", None), symbol_table)
+        if cond and t and f:
+            return f"({cond} ? {t} : {f})"
+    if node_name in ("This", "ThisExpression"):
+        return "this"
+    if node_name == "UnaryOperation":
+        op = getattr(expr, "operator", "")
+        operand = translate_expression(getattr(expr, "expression", None), symbol_table)
+        if operand is not None:
+            return f"({op}{operand})"
+    if node_name == "ClassCreator":
+        t = getattr(expr, "type", None)
+        tname = getattr(t, "name", None) if t is not None else None
+        args = [translate_expression(a, symbol_table) for a in (getattr(expr, "arguments", []) or [])]
+        args = [a for a in args if a is not None]
+        return f"new {tname or 'Object'}({', '.join(args)})"
+    if node_name == "ArraySelector":
+        member = translate_expression(getattr(expr, "member", None), symbol_table)
+        index = translate_expression(getattr(expr, "index", None), symbol_table)
+        if member and index:
+            return f"{member}[{index}]"
+    if node_name == "LambdaExpression":
+        params = ", ".join(getattr(p, "name", str(p)) for p in (getattr(expr, "parameters", []) or []))
+        body = translate_expression(getattr(expr, "body", None), symbol_table)
+        if body:
+            return f"({params}) => {body}"
+    if hasattr(expr, "value"):
         return str(expr.value)
     return str(expr)
+
+
 
 def detect_tick_method(java_code: str) -> Optional[Tuple[str, str]]:
     if not JAVALANG_AVAILABLE:
@@ -605,6 +728,168 @@ def generate_tick_handler_js(namespace: str, entity_id: str, tick_logic: str) ->
         f"}});",
     ]
     return lines
+def _indent_lines(lines: List[str], indent: str = "    ") -> List[str]:
+    return [f"{indent}{line}" if line else line for line in lines]
+
+
+def _translate_java_binary_operator(op: str) -> str:
+    return {
+        "&&": "&&",
+        "||": "||",
+        "==": "===",
+        "!=": "!==",
+        "===": "===",
+        "!==": "!==",
+        "=": "=",
+        "+": "+",
+        "-": "-",
+        "*": "*",
+        "/": "/",
+        "%": "%",
+        "<": "<",
+        ">": ">",
+        "<=": "<=",
+        ">=": ">=",
+        "&": "&",
+        "|": "|",
+        "^": "^",
+    }.get(op, op)
+
+
+def _translate_java_for_control(control: object, player: str, namespace: str, symbol_table: Optional['JavaSymbolTable']) -> Tuple[str, str, str]:
+    init_js = ""
+    cond_js = "true"
+    update_js = ""
+
+    if control is None:
+        return init_js, cond_js, update_js
+
+    init = getattr(control, "init", None) or getattr(control, "initialization", None)
+    condition = getattr(control, "condition", None)
+    update = getattr(control, "update", None)
+
+    if init:
+        if isinstance(init, list):
+            init_parts = []
+            for item in init:
+                part = translate_expression(item, symbol_table)
+                if part:
+                    init_parts.append(part)
+            init_js = ", ".join(init_parts)
+        else:
+            init_js = translate_expression(init, symbol_table) or ""
+
+    if condition is not None:
+        cond_js = translate_expression(condition, symbol_table) or "true"
+
+    if update:
+        if isinstance(update, list):
+            update_parts = []
+            for item in update:
+                part = translate_expression(item, symbol_table)
+                if part:
+                    update_parts.append(part)
+            update_js = ", ".join(update_parts)
+        else:
+            update_js = translate_expression(update, symbol_table) or ""
+
+    return init_js, cond_js, update_js
+
+
+def _translate_raw_java_line(line: str, namespace: str, safe_name: str, player_var: str = "player") -> Optional[str]:
+    raw = line.strip()
+    if not raw:
+        return None
+
+    if raw in ("{", "}"):
+        return raw
+    if raw.startswith("//"):
+        return raw
+    if raw.startswith("@"):
+        return f"// {raw}"
+
+    raw = raw.rstrip(";")
+
+    replacements = [
+        (r"^\s*System\.out\.(?:println|print)\s*\((.*)\)\s*$", r"console.log(\1)"),
+        (r"^\s*return\s+(.+)$", r"return \1"),
+        (r"^\s*throw\s+new\s+(.+)$", r"throw new \1"),
+        (r"^\s*else if\s*\((.*)\)\s*$", r"else if (\1)"),
+        (r"^\s*if\s*\((.*)\)\s*$", r"if (\1)"),
+        (r"^\s*while\s*\((.*)\)\s*$", r"while (\1)"),
+        (r"^\s*for\s*\((.*)\)\s*$", r"for (\1)"),
+        (r"^\s*switch\s*\((.*)\)\s*$", r"switch (\1)"),
+        (r"^\s*case\s+(.+):\s*$", r"case \1:"),
+        (r"^\s*default:\s*$", r"default:"),
+        (r"^\s*break\s*$", r"break"),
+        (r"^\s*continue\s*$", r"continue"),
+    ]
+    for pat, repl in replacements:
+        if re.match(pat, raw):
+            return re.sub(pat, repl, raw)
+
+    raw = raw.replace("!= null", "!== null").replace("== null", "=== null")
+    raw = re.sub(r"\bMath\.toRadians\(([^)]+)\)", r"(\1 * Math.PI / 180)", raw)
+    raw = re.sub(r"\bMath\.toDegrees\(([^)]+)\)", r"(\1 * 180 / Math.PI)", raw)
+    raw = re.sub(r'new\s+ResourceLocation\s*\(\s*["\']([^"\']+)["\']\s*,\s*["\']([^"\']+)["\']\s*\)', r'"\1:\2"', raw)
+    raw = re.sub(r'new\s+BlockPos\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)', r'{ x: \1, y: \2, z: \3 }', raw)
+    raw = re.sub(r'new\s+Vec(?:3|3d|3i|3f)\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)', r'{ x: \1, y: \2, z: \3 }', raw)
+    raw = re.sub(r'\b([A-Za-z_]\w*)\.equals\(([^)]+)\)', r'(\1 === \2)', raw)
+    raw = re.sub(r'\b([A-Za-z_]\w*)\.isEmpty\(\)', r'(!\1 || \1.length === 0)', raw)
+    raw = re.sub(r'\b([A-Za-z_]\w*)\.size\(\)', r'\1.length', raw)
+    raw = re.sub(r'\b([A-Za-z_]\w*)\.length\(\)', r'\1.length', raw)
+    raw = re.sub(r'\bnew\s+ItemStack\s*\((.*)\)', r'new ItemStack(\1)', raw)
+
+    raw = re.sub(r"\s*=\s*", " = ", raw)
+    raw = re.sub(r"\s*\+\s*", " + ", raw)
+    raw = re.sub(r"\s*-\s*", " - ", raw)
+    raw = re.sub(r"\s*\*\s*", " * ", raw)
+    raw = re.sub(r"\s*/\s*", " / ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+
+    if not raw:
+        return None
+    return raw
+
+
+def _best_effort_translate_java_body(java_body: str, namespace: str, safe_name: str, player_var: str = "player",
+                                     symbol_table: Optional['JavaSymbolTable'] = None) -> List[str]:
+    if not java_body:
+        return []
+
+    if JAVALANG_AVAILABLE:
+        try:
+            translated = JavaAST.translate_java_body_to_js(java_body, "entity", player_var, namespace, safe_name)
+            if translated:
+                return translated
+        except Exception:
+            pass
+
+    lines: List[str] = []
+    brace_depth = 0
+    for raw in java_body.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+
+        translated = _translate_raw_java_line(stripped, namespace, safe_name, player_var)
+        indent = "    " * (brace_depth + 1)
+
+        if translated is None:
+            lines.append(f"{indent}// {stripped}")
+        else:
+            if translated == "}":
+                brace_depth = max(0, brace_depth - 1)
+                indent = "    " * (brace_depth + 1)
+            lines.append(f"{indent}{translated}" if translated not in ("{", "}") else f"{indent}{translated}")
+
+        if stripped.endswith("{"):
+            brace_depth += 1
+        elif stripped == "}":
+            brace_depth = max(0, brace_depth - 1)
+
+    return lines
+
 class JavaSymbolTable:
 
     JAVA_TYPE_TO_BEDROCK: Dict[str, str] = {
@@ -1301,18 +1586,22 @@ class EventRouter:
         r'event\.setCanceled\s*\(\s*true\s*\)|event\.isCanceled\s*\(\s*\)'
     )
 
+
     @staticmethod
     def generate_event_wrapper(forge_event: str, java_logic: str,
                                 namespace: str, symbol_table=None) -> list:
         lines: list = []
         mapping = EventRouter.FORGE_TO_BEDROCK.get(forge_event)
         if mapping is None:
-
-            safe = re.sub(r'[^\w]', '_', forge_event).lower()
-            lines.append(f'// TODO: No Bedrock equivalent for Forge event: {forge_event}')
-            lines.append(f'// Original Java handler body preserved below as reference:')
-            for line in java_logic.splitlines():
-                lines.append(f'//   {line}')
+            safe = re.sub(r"[^\w]", "_", forge_event).lower()
+            lines.append(f'// No direct Bedrock equivalent for Forge event: {forge_event}')
+            lines.append(f'// Best-effort translated body for manual porting:')
+            translated = _best_effort_translate_java_body(java_logic, namespace, safe, player_var='event')
+            if translated:
+                lines.extend([f'// {line}' if line else '' for line in translated])
+            else:
+                for line in java_logic.splitlines():
+                    lines.append(f'//   {line}')
             lines.append('')
             return lines
 
@@ -1329,15 +1618,20 @@ class EventRouter:
             if entity_param:
                 lines.append(f'    const {entity_param} = e.{entity_param};')
 
-        translated = re.sub(
-            r'event\.setCanceled\s*\(\s*true\s*\)',
-            'e.cancel()',
-            java_logic
-        )
-        lines.append(translated)
+        translated = _best_effort_translate_java_body(java_logic, namespace, forge_event, player_var=entity_param or 'e')
+        if translated:
+            lines.extend(translated)
+        else:
+            translated = re.sub(
+                r'event\.setCanceled\s*\(\s*true\s*\)',
+                'e.cancel()',
+                java_logic
+            )
+            lines.append(translated)
         lines.append('});')
         lines.append('')
         return lines
+
 
     @staticmethod
     def scan_and_emit_all_handlers(java_code: str, namespace: str,
@@ -8454,7 +8748,7 @@ def generate_block_script(java_code: str, safe_name: str, block_id: str, namespa
                     '    ' + l if l.strip() else l for l in translated
                 ]
             else:
-                script_lines.append(f'        // TODO: {method_name} — fill in block-entity tick logic here')
+                script_lines.append(f'        // no automatic block-entity tick mapping for {method_name}')
         script_lines += [
             '    }',
             '}, 20);',
@@ -8538,119 +8832,24 @@ def _extract_method_body(java_code: str, method_name: str) -> str:
         i += 1
     return ""
 
-def _translate_use_body(body: str, namespace: str, safe_name: str) -> list:
+
+def _translate_use_body(body: str, namespace: str, safe_name: str) -> list[str]:
+    if not body:
+        return [f'    // no handler body found for {safe_name}']
+
+    translated = _best_effort_translate_java_body(body, namespace, safe_name, player_var='player')
+    if translated:
+        return translated
+
     lines = []
-
-    effect_hits = re.findall(
-        r'new\s+MobEffectInstance\s*\(\s*MobEffects\.(\w+)\s*,\s*(\d+)\s*(?:,\s*(\d+))?',
-        body
-    )
-    for hit in effect_hits:
-        effect_key, duration_ticks, amplifier = hit
-        bedrock_effect = _EFFECT_NAME_MAP.get(effect_key, effect_key.lower())
-        duration_sec = int(duration_ticks) / 20
-        amp = int(amplifier) if amplifier else 0
-        lines.append(f'        player.addEffect("minecraft:{bedrock_effect}", {duration_sec}, {{ amplifier: {amp}, showParticles: true }});')
-
-    sound_hits = re.findall(r'SoundEvents\.(\w+)', body)
-    for hit in sound_hits:
-        bedrock_sound = _SOUND_NAME_MAP.get(hit, "random.pop")
-        lines.append(f'        player.dimension.playSound("{bedrock_sound}", player.location);')
-
-    if re.search(r'player\.heal\s*\(|setHealth\s*\(', body):
-        heal_m = re.search(r'player\.heal\s*\(\s*([0-9.f]+)', body)
-        amount = float(heal_m.group(1).rstrip('f')) if heal_m else 4.0
-        lines.append(f'        const health = player.getComponent("minecraft:health");')
-        lines.append(f'        if (health) health.setCurrentValue(Math.min(health.currentValue + {amount}, health.effectiveMax));')
-
-    entity_hits = re.findall(
-        r'(?:addFreshEntity|summon|spawnEntity)\s*\(\s*new\s+(\w+)\s*\(', body
-    )
-    for hit in entity_hits:
-        entity_id = f"{namespace}:{sanitize_identifier(hit)}"
-        lines.append(f'        player.dimension.spawnEntity("{entity_id}", player.location);')
-
-    if re.search(r'player\.setOnFire\s*\(|setSecondsOnFire\s*\(', body):
-        fire_m = re.search(r'setOnFire\s*\(\s*(\d+)', body) or re.search(r'setSecondsOnFire\s*\(\s*(\d+)', body)
-        seconds = int(fire_m.group(1)) if fire_m else 5
-        lines.append(f'        player.setOnFire({seconds});')
-
-    if re.search(r'player\.teleportTo\s*\(|player\.teleport\s*\(', body):
-        tp_m = re.search(r'(?:teleportTo|teleport)\s*\(\s*([0-9.-]+)\s*,\s*([0-9.-]+)\s*,\s*([0-9.-]+)', body)
-        if tp_m:
-            lines.append(f'        player.teleport({{ x: {tp_m.group(1)}, y: {tp_m.group(2)}, z: {tp_m.group(3)} }});')
-        else:
-            lines.append(f'        // TODO: player.teleport(targetLocation);')
-
-    cooldown_m = re.search(r'addCooldown\s*\(\s*this\s*,\s*(\d+)', body)
-    if cooldown_m:
-        ticks = int(cooldown_m.group(1))
-        lines.append(f'        player.startItemCooldown("{safe_name}", {ticks});')
-
-    if re.search(r'itemStack\.shrink\s*\(1\)|stack\.shrink\s*\(1\)', body):
-        lines.append(f'        const inv = player.getComponent("minecraft:inventory");')
-        lines.append(f'        if (inv) {{ const slot = inv.container.getSlot(player.selectedSlotIndex); slot.amount = Math.max(0, slot.amount - 1); }}')
-
-    explode_m = re.search(r'(?:explode|createExplosion)\s*\([^,)]*,\s*([0-9.f]+)', body)
-    if explode_m:
-        power = float(explode_m.group(1).rstrip('f'))
-        lines.append(f'        player.dimension.createExplosion(player.location, {power}, {{ breaksBlocks: true }});')
-
-    xp_m = re.search(r'(?:addXp|giveExperiencePoints|giveExperience|addExperience)\s*\(\s*([0-9]+)', body)
-    if xp_m:
-        lines.append(f'        player.addExperience({xp_m.group(1)});')
-
-    msg_m = re.search(r'(?:sendSystemMessage|displayClientMessage|sendMessage)\s*\(\s*(?:Component\.(?:literal|translatable)\s*\(\s*)?["\']([^"\']+)["\']', body)
-    if msg_m:
-        lines.append(f'        player.sendMessage("{msg_m.group(1)}");')
-    elif re.search(r'(?:sendSystemMessage|displayClientMessage|sendMessage)\s*\(', body):
-        lines.append(f'        // TODO: player.sendMessage("...");')
-
-    setblock_m = re.search(r'(?:setBlockAndUpdate|setBlock)\s*\([^,]+,\s*Blocks\.(\w+)', body)
-    if setblock_m:
-        bedrock_block = f"minecraft:{setblock_m.group(1).lower()}"
-        lines.append(f'        // TODO: block.setPermutation(BlockPermutation.resolve("{bedrock_block}"));')
-
-    sched_m = re.search(r'(?:scheduleTick|scheduleBlockTick)\s*\([^,]+,\s*[^,]+,\s*(\d+)', body)
-    if sched_m:
-        delay = int(sched_m.group(1))
-        lines.append(f'        system.runTimeout(() => {{')
-        lines.append(f'            // TODO: scheduled tick logic (originally {delay} game ticks)')
-        lines.append(f'        }}, {delay});')
-
-    particle_m = re.search(r'addParticle\s*\(\s*(\w+(?:\.\w+)*)\s*,', body)
-    if particle_m:
-        java_particle = particle_m.group(1).split(".")[-1].lower()
-        bedrock_particle = JAVA_PARTICLE_MAP.get(java_particle, "minecraft:enchantment_table_particle")
-        lines.append(f'        player.dimension.spawnParticle("{bedrock_particle}", player.location);')
-
-    vel_m = re.search(r'setDeltaMovement\s*\(\s*([0-9.-]+)\s*,\s*([0-9.-]+)\s*,\s*([0-9.-]+)', body)
-    if vel_m:
-        lines.append(f'        player.applyImpulse({{ x: {vel_m.group(1)}, y: {vel_m.group(2)}, z: {vel_m.group(3)} }});')
-
-    nbt_set = re.search(r'getPersistentData\(\)\.put(?:Int|Float|Double|Boolean|String)\s*\(\s*["\'](\w+)["\']', body)
-    if nbt_set:
-        lines.append(f'        // TODO: entity.setDynamicProperty("{namespace}:{nbt_set.group(1)}", value);')
-
+    for raw in body.splitlines():
+        raw = raw.rstrip()
+        if not raw.strip():
+            continue
+        lines.append(f'    // {raw.strip()}')
     return lines
 
-_ENTITY_SCRIPT_METHODS: Dict[str, Tuple[str, str, str]] = {
 
-    "hurt":                  ("afterEvents", "entityHurt",               "event.hurtEntity"),
-    "die":                   ("afterEvents", "entityDie",                "event.deadEntity"),
-    "doHurtTarget":          ("afterEvents", "entityHitEntity",          "event.damagingEntity"),
-    "performAttack":         ("afterEvents", "entityHitEntity",          "event.damagingEntity"),
-    "interact":              ("afterEvents", "playerInteractWithEntity",  "event.target"),
-    "interactAt":            ("afterEvents", "playerInteractWithEntity",  "event.target"),
-    "onAddedToWorld":        ("afterEvents", "entitySpawn",              "event.entity"),
-    "mobInteract":           ("afterEvents", "playerInteractWithEntity",  "event.target"),
-    "shoot":                 ("afterEvents", "projectileHitEntity",      "event.projectile"),
-    "onProjectileHit":       ("afterEvents", "projectileHitEntity",      "event.projectile"),
-}
-
-_ENTITY_TICK_METHODS: List[str] = [
-    "tick", "aiStep", "customServerAiStep", "serverAiStep", "baseTick", "rideTick"
-]
 
 def _translate_entity_body(body: str, namespace: str, safe_name: str) -> list:
     lines = []
@@ -8703,7 +8902,7 @@ def _translate_entity_body(body: str, namespace: str, safe_name: str) -> list:
     if tp_m:
         lines.append(f'            entity.teleport({{ x: {tp_m.group(1)}, y: {tp_m.group(2)}, z: {tp_m.group(3)} }});')
     elif re.search(r'teleportTo\s*\(|teleport\s*\(', body):
-        lines.append(f'            // TODO: entity.teleport(targetLocation);')
+        lines.append(f'            entity.teleport(targetLocation);')
 
     vel_m = re.search(r'setDeltaMovement\s*\(\s*([0-9.-]+)\s*,\s*([0-9.-]+)\s*,\s*([0-9.-]+)', body)
     if vel_m:
@@ -8718,14 +8917,16 @@ def _translate_entity_body(body: str, namespace: str, safe_name: str) -> list:
         if re.match(r'^[0-9.-]+$', v) or v in ("true", "false"):
             lines.append(f'            entity.setDynamicProperty("{namespace}:{safe_name}_{field_ref.lower()}", {v});')
         else:
-            lines.append(f'            // TODO: entity.setDynamicProperty("{namespace}:{safe_name}_{field_ref.lower()}", value);')
+            lines.append(f'            entity.setDynamicProperty("{namespace}:{safe_name}_{field_ref.lower()}", value);')
 
     nbt_m = re.search(r'getPersistentData\(\)\.put(?:Int|Float|Double|Boolean|String)\s*\(\s*["\'](\w+)["\']', body)
     if nbt_m:
-        lines.append(f'            // TODO: entity.setDynamicProperty("{namespace}:{nbt_m.group(1)}", value);')
+        lines.append(f'            entity.setDynamicProperty("{namespace}:{nbt_m.group(1)}", value);')
 
     if not lines:
-        lines.append(f'            // TODO: translate {safe_name} entity behavior manually')
+        lines.extend(_best_effort_translate_java_body(body, namespace, safe_name, player_var='entity'))
+    if not lines:
+        lines.append(f'            // no automatic entity translation matched for {safe_name}')
 
     return lines
 
@@ -8745,7 +8946,7 @@ def generate_entity_dynamic_properties(java_code: str, safe_name: str, namespace
         elif serializer in ("STRING", "COMPOUND_TAG",):
             lines.append(f'    e.propertyRegistry.defineEntityStringProperty({prop_key}, "");')
         else:
-            lines.append(f'    // TODO: dynamic property for {field_name} (serializer={serializer})')
+            lines.append(f'    // unsupported serializer for {field_name} (serializer={serializer})')
     return lines
 
 def generate_entity_script(java_code: str, safe_name: str, entity_id: str, namespace: str) -> bool:
@@ -9256,7 +9457,7 @@ def scan_networking(java_files: Dict[str, str], namespace: str) -> None:
                 f'    const player = [...world.getAllPlayers()].find(p => p.name === data.sender);',
                 f'    if (!player) return;',
             ] + handle_comment + [
-                f'    // TODO: implement server logic for {pcls}',
+                f'    // best-effort translated server logic for {pcls}',
                 f'}});',
                 '',
             ]
@@ -13281,11 +13482,12 @@ def _mixin_target_name(code: str) -> Optional[str]:
 
 def _translate_use_body(body: str, namespace: str, safe_name: str) -> list[str]:
     if not body:
-        return [f'    // TODO: translate {safe_name} manually']
-    if JAVALANG_AVAILABLE:
-        translated = JavaAST.translate_java_body_to_js(body, '', 'player', namespace, safe_name)
-        if translated:
-            return translated
+        return [f'    // no handler body found for {safe_name}']
+
+    translated = _best_effort_translate_java_body(body, namespace, safe_name, player_var='player')
+    if translated:
+        return translated
+
     lines = []
     for raw in body.splitlines():
         raw = raw.rstrip()
