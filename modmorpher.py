@@ -12,7 +12,7 @@ import subprocess
 import re
 from typing import Optional, Tuple, Dict, Set, List, Union
 
-DEBUG_MODE = 1
+DEBUG_MODE = 0
 
 _REAL_PRINT = builtins.print
 def _silent_print(*args, **kwargs):
