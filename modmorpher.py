@@ -31,7 +31,7 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.6 'Birthday Bug Fixes!'"
+Tool_Version = "1.6.1 'the Red Pill or The Blue Pill?'"
 DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
