@@ -12,7 +12,7 @@ import subprocess
 import re
 from typing import Optional, Tuple, Dict, Set, List, Union
 
-DEBUG_MODE = os.getenv("MODMORPHER_DEBUG", "0") == "1"
+DEBUG_MODE = 1
 
 _REAL_PRINT = builtins.print
 def _silent_print(*args, **kwargs):
@@ -7019,8 +7019,6 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
                         break
     if not geom_identifier and entity_basename.lower() in geom_file_map:
         geom_identifier = geom_file_map[entity_basename.lower()]
-    # Fuzzy fallback: try to find a geometry whose file stem shares a common prefix/token
-    # with the namespace (e.g. "toww_geckolib" for entities in the "the_one_who_watches" mod).
     if not geom_identifier and geom_file_map:
         ns_tokens = set(re.split(r'[_\-]', namespace.lower())) - {'the', 'a', 'an', 'of', ''}
         ent_tokens = set(re.split(r'[_\-]', entity_basename.lower())) - {'entity', 'mob', ''}
@@ -7028,15 +7026,12 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
         best_score = 0
         for gkey, gident in geom_file_map.items():
             geo_tokens = set(re.split(r'[_\-]', gkey.lower()))
-            # Score = number of shared tokens with namespace + entity name
             score = len(geo_tokens & ns_tokens) * 2 + len(geo_tokens & ent_tokens)
             if score > best_score:
                 best_score = score
                 best_key = gkey
-        # Only accept if there's a meaningful token overlap (≥2 shared tokens)
         if best_key and best_score >= 2:
             geom_identifier = geom_file_map[best_key]
-        # Last resort: if there's only one entity-geo file in the pack, use it
         elif len(geom_file_map) == 1:
             geom_identifier = next(iter(geom_file_map.values()))
     if not geom_identifier:
@@ -7101,8 +7096,6 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
     if not geom_identifier:
         geom_identifier = f"geometry.{namespace}.{entity_name}"
         stats["missing_geometry"].append((java_path, entity_basename))
-        # Write a stub geometry file so the pruner doesn't remove the RP entity
-        # (and cascade-prune render controllers) due to an unresolved geometry ref.
         stub_geo = {
             "format_version": "1.12.0",
             "minecraft:geometry": [{
@@ -8310,14 +8303,694 @@ def run_class_decompiler(jar_file, output_dir):
         _warn(f"Decompilation failure: {e}")
         return None
 
+def _is_java_texture_pack(zip_path: str) -> bool:
+    """Return True if the zip looks like a Java Edition resource/texture pack."""
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            has_mcmeta = "pack.mcmeta" in names
+            has_assets_textures = any(
+                n.startswith("assets/") and n.endswith(".png")
+                for n in names
+            )
+            has_direct_textures = any(
+                n.startswith("textures/") and n.endswith(".png")
+                for n in names
+            )
+            return has_mcmeta or has_assets_textures or has_direct_textures
+    except Exception as e:
+        _REAL_PRINT(f"  [TexturePack] Could not open {zip_path}: {e}")
+        return False
+_JAVA_TO_BEDROCK_TEXTURE_PATHS: List[Tuple[str, str]] = [
+    ("assets/minecraft/textures/block/",  "textures/blocks/"),
+    ("assets/minecraft/textures/blocks/", "textures/blocks/"),
+    ("assets/minecraft/textures/item/",   "textures/items/"),
+    ("assets/minecraft/textures/items/",  "textures/items/"),
+    ("assets/minecraft/textures/entity/", "textures/entity/"),
+    ("assets/minecraft/textures/gui/",    "textures/ui/"),
+    ("assets/minecraft/textures/misc/",   "textures/misc/"),
+    ("assets/minecraft/textures/environment/", "textures/environment/"),
+    ("assets/minecraft/textures/particle/",    "textures/particle/"),
+    ("assets/minecraft/textures/colormap/",    "textures/colormap/"),
+    ("assets/minecraft/textures/effect/",      "textures/misc/"),
+    ("assets/minecraft/textures/models/",      "textures/models/"),
+    ("assets/minecraft/textures/painting/",    "textures/painting/"),
+    ("assets/minecraft/textures/map/",         "textures/map/"),
+    ("assets/minecraft/textures/mob_effect/",  "textures/mob_effect/"),
+]
+
+_JAVA_BLOCK_RENAME_MAP: Dict[str, str] = {
+    "grass_block_top":    "grass_top",
+    "grass_block_side":   "grass_side",
+    "grass_block_side_overlay": "grass_side_snowed",
+    "dirt_path_top":      "grass_path_top",
+    "dirt_path_side":     "grass_path_side",
+    "water_still":        "water_still",
+    "water_flow":         "water_flow",
+    "lava_still":         "lava_still",
+    "lava_flow":          "lava_flow",
+    "oak_log":            "log_oak",
+    "birch_log":          "log_birch",
+    "spruce_log":         "log_spruce",
+    "jungle_log":         "log_jungle",
+    "acacia_log":         "log_acacia",
+    "dark_oak_log":       "log_big_oak",
+    "oak_planks":         "planks_oak",
+    "birch_planks":       "planks_birch",
+    "spruce_planks":      "planks_spruce",
+    "jungle_planks":      "planks_jungle",
+    "acacia_planks":      "planks_acacia",
+    "dark_oak_planks":    "planks_big_oak",
+    "stone_bricks":       "stonebrick",
+    "mossy_stone_bricks": "stonebrick_mossy",
+    "cracked_stone_bricks": "stonebrick_cracked",
+    "chiseled_stone_bricks": "stonebrick_carved",
+    "smooth_stone":       "stone_slab_top",
+    "cobblestone":        "cobblestone",
+    "mossy_cobblestone":  "cobblestone_mossy",
+    "sand":               "sand",
+    "red_sand":           "red_sand",
+    "gravel":             "gravel",
+    "oak_leaves":         "leaves_oak",
+    "birch_leaves":       "leaves_birch",
+    "spruce_leaves":      "leaves_spruce",
+    "jungle_leaves":      "leaves_jungle",
+    "acacia_leaves":      "leaves_acacia",
+    "dark_oak_leaves":    "leaves_big_oak",
+    "glass":              "glass",
+    "tnt_side":           "tnt_side",
+    "tnt_top":            "tnt_top",
+    "tnt_bottom":         "tnt_bottom",
+    "crafting_table_top": "crafting_table_top",
+    "crafting_table_front": "crafting_table_front",
+    "crafting_table_side": "crafting_table_side",
+    "furnace_front":      "furnace_front_off",
+    "furnace_front_on":   "furnace_front_on",
+    "furnace_side":       "furnace_side",
+    "furnace_top":        "furnace_top",
+    "bookshelf":          "bookshelf",
+    "pumpkin_top":        "pumpkin_top",
+    "pumpkin_side":       "pumpkin_face_off",
+    "jack_o_lantern":     "pumpkin_face_on",
+    "melon_side":         "melon_side",
+    "melon_top":          "melon_top",
+    "nether_bricks":      "nether_brick",
+    "netherrack":         "netherrack",
+    "soul_sand":          "soul_sand",
+    "glowstone":          "glowstone",
+    "end_stone":          "end_stone",
+    "obsidian":           "obsidian",
+    "bedrock":            "bedrock",
+    "coal_ore":           "coal_ore",
+    "iron_ore":           "iron_ore",
+    "gold_ore":           "gold_ore",
+    "diamond_ore":        "diamond_ore",
+    "emerald_ore":        "emerald_ore",
+    "lapis_ore":          "lapis_ore",
+    "redstone_ore":       "redstone_ore",
+    "coal_block":         "coal_block",
+    "iron_block":         "iron_block",
+    "gold_block":         "gold_block",
+    "diamond_block":      "diamond_block",
+    "emerald_block":      "emerald_block",
+    "lapis_block":        "lapis_block",
+    "redstone_block":     "redstone_block",
+    "quartz_block_side":  "quartz_side",
+    "quartz_block_top":   "quartz_top",
+    "quartz_block_bottom": "quartz_bottom",
+    "chiseled_quartz_block": "chiseled_quartz_block",
+    "sandstone":          "sandstone_normal",
+    "sandstone_top":      "sandstone_top",
+    "sandstone_bottom":   "sandstone_bottom",
+    "chiseled_sandstone": "sandstone_carved",
+    "smooth_sandstone":   "sandstone_smooth",
+    "red_sandstone":      "red_sandstone_normal",
+    "red_sandstone_top":  "red_sandstone_top",
+    "red_sandstone_bottom": "red_sandstone_bottom",
+    "snow":               "snow",
+    "ice":                "ice",
+    "packed_ice":         "ice_packed",
+    "blue_ice":           "blue_ice",
+    "clay":               "clay",
+    "mycelium_top":       "mycelium_top",
+    "mycelium_side":      "mycelium_side",
+    "mushroom_stem":      "mushroom_skin_stem",
+    "brown_mushroom_block": "mushroom_skin_brown",
+    "red_mushroom_block": "mushroom_skin_red",
+    "note_block":         "noteblock",
+    "jukebox_side":       "jukebox_side",
+    "jukebox_top":        "jukebox_top",
+    "sponge":             "sponge",
+    "wet_sponge":         "sponge_wet",
+    "hay_block_side":     "hay_block_side",
+    "hay_block_top":      "hay_block_top",
+    "terracotta":         "hardened_clay",
+    "white_terracotta":   "hardened_clay_stained_white",
+    "orange_terracotta":  "hardened_clay_stained_orange",
+    "magenta_terracotta": "hardened_clay_stained_magenta",
+    "light_blue_terracotta": "hardened_clay_stained_light_blue",
+    "yellow_terracotta":  "hardened_clay_stained_yellow",
+    "lime_terracotta":    "hardened_clay_stained_lime",
+    "pink_terracotta":    "hardened_clay_stained_pink",
+    "gray_terracotta":    "hardened_clay_stained_gray",
+    "light_gray_terracotta": "hardened_clay_stained_silver",
+    "cyan_terracotta":    "hardened_clay_stained_cyan",
+    "purple_terracotta":  "hardened_clay_stained_purple",
+    "blue_terracotta":    "hardened_clay_stained_blue",
+    "brown_terracotta":   "hardened_clay_stained_brown",
+    "green_terracotta":   "hardened_clay_stained_green",
+    "red_terracotta":     "hardened_clay_stained_red",
+    "black_terracotta":   "hardened_clay_stained_black",
+    "white_wool":         "wool_colored_white",
+    "orange_wool":        "wool_colored_orange",
+    "magenta_wool":       "wool_colored_magenta",
+    "light_blue_wool":    "wool_colored_light_blue",
+    "yellow_wool":        "wool_colored_yellow",
+    "lime_wool":          "wool_colored_lime",
+    "pink_wool":          "wool_colored_pink",
+    "gray_wool":          "wool_colored_gray",
+    "light_gray_wool":    "wool_colored_silver",
+    "cyan_wool":          "wool_colored_cyan",
+    "purple_wool":        "wool_colored_purple",
+    "blue_wool":          "wool_colored_blue",
+    "brown_wool":         "wool_colored_brown",
+    "green_wool":         "wool_colored_green",
+    "red_wool":           "wool_colored_red",
+    "black_wool":         "wool_colored_black",
+    "white_concrete":     "concrete_white",
+    "orange_concrete":    "concrete_orange",
+    "magenta_concrete":   "concrete_magenta",
+    "light_blue_concrete": "concrete_light_blue",
+    "yellow_concrete":    "concrete_yellow",
+    "lime_concrete":      "concrete_lime",
+    "pink_concrete":      "concrete_pink",
+    "gray_concrete":      "concrete_gray",
+    "light_gray_concrete": "concrete_silver",
+    "cyan_concrete":      "concrete_cyan",
+    "purple_concrete":    "concrete_purple",
+    "blue_concrete":      "concrete_blue",
+    "brown_concrete":     "concrete_brown",
+    "green_concrete":     "concrete_green",
+    "red_concrete":       "concrete_red",
+    "black_concrete":     "concrete_black",
+}
+
+_JAVA_ITEM_RENAME_MAP: Dict[str, str] = {
+    "wooden_sword":   "wood_sword",
+    "wooden_pickaxe": "wood_pickaxe",
+    "wooden_axe":     "wood_axe",
+    "wooden_shovel":  "wood_shovel",
+    "wooden_hoe":     "wood_hoe",
+    "stone_sword":    "stone_sword",
+    "stone_pickaxe":  "stone_pickaxe",
+    "stone_axe":      "stone_axe",
+    "stone_shovel":   "stone_shovel",
+    "stone_hoe":      "stone_hoe",
+    "golden_sword":   "gold_sword",
+    "golden_pickaxe": "gold_pickaxe",
+    "golden_axe":     "gold_axe",
+    "golden_shovel":  "gold_shovel",
+    "golden_hoe":     "gold_hoe",
+    "golden_helmet":  "gold_helmet",
+    "golden_chestplate": "gold_chestplate",
+    "golden_leggings": "gold_leggings",
+    "golden_boots":   "gold_boots",
+    "golden_apple":   "apple_golden",
+    "enchanted_golden_apple": "apple_enchanted",
+    "carrot_on_a_stick": "carrotonastick",
+    "warped_fungus_on_a_stick": "warped_fungus_on_a_stick",
+    "bow_pulling_0":  "bow_pulling_0",
+    "bow_pulling_1":  "bow_pulling_1",
+    "bow_pulling_2":  "bow_pulling_2",
+    "ender_pearl":    "ender_pearl",
+    "ender_eye":      "ender_eye",
+    "ghast_tear":     "ghast_tear",
+    "nether_star":    "nether_star",
+    "totem_of_undying": "totem",
+    "knowledge_book": "book_knowledge",
+    "writable_book":  "book_writable",
+    "written_book":   "book_written",
+    "enchanted_book": "book_enchanted",
+    "potion":         "potion_bottle_drinkable",
+    "splash_potion":  "potion_bottle_splash",
+    "lingering_potion": "potion_bottle_lingering",
+    "experience_bottle": "potion_bottle_splash_empty",
+    "flower_pot":     "flower_pot",
+    "flower_banner_pattern": "flower_banner_pattern",
+    "leather_helmet": "leather_helmet",
+    "leather_chestplate": "leather_chestplate",
+    "leather_leggings": "leather_leggings",
+    "leather_boots":  "leather_boots",
+    "flint_and_steel": "flint_and_steel",
+    "name_tag":       "name_tag",
+    "lead":           "leash",
+    "compass":        "compass_item",
+    "clock":          "watch_item",
+    "map":            "map_empty",
+    "filled_map":     "map_filled",
+    "shears":         "shears",
+    "fishing_rod":    "fishing_rod_uncast",
+    "fishing_rod_cast": "fishing_rod_cast",
+    "bucket":         "bucket_empty",
+    "water_bucket":   "bucket_water",
+    "lava_bucket":    "bucket_lava",
+    "milk_bucket":    "bucket_milk",
+    "powder_snow_bucket": "bucket_powder_snow",
+    "heart_of_the_sea": "heart_of_the_sea",
+    "nautilus_shell": "nautilus_shell",
+    "turtle_helmet":  "turtle_helmet",
+    "phantom_membrane": "phantom_membrane",
+    "sweet_berries":  "sweet_berries",
+    "glow_berries":   "glow_berries",
+    "honey_bottle":   "honey_bottle",
+    "honeycomb":      "honeycomb",
+    "crossbow":       "crossbow",
+    "crossbow_pulling_0": "crossbow_pulling_0",
+    "crossbow_pulling_1": "crossbow_pulling_1",
+    "crossbow_pulling_2": "crossbow_pulling_2",
+    "crossbow_arrow": "crossbow_arrow",
+    "crossbow_firework": "crossbow_firework",
+    "trident":        "trident",
+    "shield":         "shield",
+    "elytra":         "elytra",
+    "spyglass":       "spyglass",
+    "goat_horn":      "goat_horn",
+    "disc_fragment_5": "disc_fragment_5",
+    "echo_shard":     "echo_shard",
+    "recovery_compass": "recovery_compass",
+    "music_disc_5":   "record_5",
+    "music_disc_11":  "record_11",
+    "music_disc_13":  "record_13",
+    "music_disc_blocks": "record_blocks",
+    "music_disc_cat": "record_cat",
+    "music_disc_chirp": "record_chirp",
+    "music_disc_far": "record_far",
+    "music_disc_mall": "record_mall",
+    "music_disc_mellohi": "record_mellohi",
+    "music_disc_otherside": "record_otherside",
+    "music_disc_pigstep": "record_pigstep",
+    "music_disc_stal": "record_stal",
+    "music_disc_strad": "record_strad",
+    "music_disc_wait": "record_wait",
+    "music_disc_ward": "record_ward",
+}
+
+
+def _resize_texture_for_bedrock(src_path: str, dst_path: str) -> bool:
+    """
+    Copy a texture to dst_path.  If Pillow is available and the texture is
+    animated (height > width, i.e. an atlas strip), crop to the first frame
+    so Bedrock does not misread it.  Returns True on success.
+    """
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    if not PIL_AVAILABLE:
+        shutil.copy2(src_path, dst_path)
+        return True
+    try:
+        with Image.open(src_path) as img:
+            w, h = img.size
+            if h > w and h % w == 0:
+                frame = img.crop((0, 0, w, w))
+                frame.save(dst_path)
+            else:
+                img.save(dst_path)
+        return True
+    except Exception:
+        try:
+            shutil.copy2(src_path, dst_path)
+            return True
+        except Exception:
+            return False
+
+
+def convert_java_texture_pack(zip_path: str) -> str:
+    """
+    Convert a Java Edition texture / resource pack ZIP into a Bedrock Edition
+    resource pack folder (and .mcpack zip).
+
+    Returns the path to the output .mcpack file, or an empty string on failure.
+    """
+    _orig = _logger._original_print
+    _orig(f"\n  [TexturePack] Converting Java texture pack: {zip_path}")
+
+    pack_stem = os.path.splitext(os.path.basename(zip_path))[0]
+    out_dir   = f"{pack_stem}_Bedrock_RP"
+    pack_name = pack_stem
+    pack_desc = ""
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            if "pack.mcmeta" in zf.namelist():
+                meta = json.loads(zf.read("pack.mcmeta").decode("utf-8", errors="replace"))
+                raw_desc = meta.get("pack", {}).get("description", "")
+                if isinstance(raw_desc, list):
+                    raw_desc = " ".join(
+                        seg.get("text", "") if isinstance(seg, dict) else str(seg)
+                        for seg in raw_desc
+                    )
+                pack_desc = str(raw_desc).strip()
+    except Exception:
+        pass
+
+    if pack_desc:
+        pack_name = pack_desc[:64]
+    for sub in [
+        "textures/blocks",
+        "textures/items",
+        "textures/entity",
+        "textures/ui",
+        "textures/misc",
+        "textures/environment",
+        "textures/particle",
+        "textures/colormap",
+        "textures/models",
+        "textures/painting",
+        "textures/map",
+        "textures/mob_effect",
+        "font",
+        "sounds",
+        "texts",
+    ]:
+        os.makedirs(os.path.join(out_dir, sub), exist_ok=True)
+
+    stats = {
+        "copied":  0,
+        "renamed": 0,
+        "skipped": 0,
+        "errors":  0,
+    }
+    item_texture_map:  Dict[str, str] = {}
+    block_texture_map: Dict[str, str] = {}
+
+    _orig("  [TexturePack] Extracting & remapping textures …")
+    _REAL_PRINT(f"  [TexturePack] ZIP contents (first 30 entries):")
+    try:
+        with zipfile.ZipFile(zip_path, "r") as _diag_zf:
+            for _n in _diag_zf.namelist()[:30]:
+                _REAL_PRINT(f"    {_n!r}")
+    except Exception as _e:
+        _REAL_PRINT(f"    (could not list: {_e})")
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        raw_names = zf.namelist()
+        zip_root_prefix = ""
+        for candidate in raw_names:
+            candidate_norm = candidate.replace("\\", "/")
+            if "/assets/" in candidate_norm and not candidate_norm.startswith("assets/"):
+                idx = candidate_norm.index("/assets/")
+                zip_root_prefix = candidate_norm[: idx + 1]
+                break
+            if candidate_norm == "pack.mcmeta":
+                break  
+        if zip_root_prefix:
+            _REAL_PRINT(f"  [TexturePack] Detected zip subfolder prefix: {zip_root_prefix!r}")
+            names = [n.replace("\\", "/")[len(zip_root_prefix):] if n.replace("\\", "/").startswith(zip_root_prefix) else n.replace("\\", "/") for n in raw_names]
+            _name_map = {}
+            for orig in raw_names:
+                stripped = orig.replace("\\", "/")
+                if stripped.startswith(zip_root_prefix):
+                    stripped = stripped[len(zip_root_prefix):]
+                _name_map[stripped] = orig
+        else:
+            names = [n.replace("\\", "/") for n in raw_names]
+            _name_map = {n.replace("\\", "/"): n for n in raw_names}
+
+        def _zf_read(logical_name: str) -> bytes:
+            return zf.read(_name_map.get(logical_name, logical_name))
+
+        def _zf_open(logical_name):
+            return zf.open(_name_map.get(logical_name, logical_name))
+        for icon_path in ("pack.png", "assets/pack.png"):
+            if icon_path in names:
+                try:
+                    icon_data = _zf_read(icon_path)
+                    icon_out  = os.path.join(out_dir, "pack_icon.png")
+                    with open(icon_out, "wb") as fh:
+                        fh.write(icon_data)
+                    if PIL_AVAILABLE:
+                        with Image.open(icon_out) as img:
+                            if img.size != (64, 64):
+                                img.resize((64, 64), Image.LANCZOS).save(icon_out)
+                except Exception:
+                    pass
+                break
+        for entry in names:
+            if entry.startswith("assets/minecraft/font/") and entry.endswith(".png"):
+                fname = os.path.basename(entry)
+                dst   = os.path.join(out_dir, "font", fname)
+                try:
+                    with _zf_open(entry) as src_fh:
+                        data = src_fh.read()
+                    with open(dst, "wb") as dst_fh:
+                        dst_fh.write(data)
+                    stats["copied"] += 1
+                except Exception:
+                    stats["errors"] += 1
+        for entry in names:
+            if entry.startswith("assets/minecraft/sounds/") and (
+                entry.endswith(".ogg") or entry.endswith(".wav")
+            ):
+                rel   = entry[len("assets/minecraft/sounds/"):]
+                dst   = os.path.join(out_dir, "sounds", rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                try:
+                    with _zf_open(entry) as src_fh:
+                        data = src_fh.read()
+                    with open(dst, "wb") as dst_fh:
+                        dst_fh.write(data)
+                    stats["copied"] += 1
+                except Exception:
+                    stats["errors"] += 1
+        for entry in names:
+            if entry.startswith("assets/minecraft/lang/") and entry.endswith(".json"):
+                lang_code = os.path.splitext(os.path.basename(entry))[0]
+                dst = os.path.join(out_dir, "texts", f"{lang_code}.lang")
+                try:
+                    raw = _zf_read(entry).decode("utf-8", errors="replace")
+                    java_lang = json.loads(raw)
+                    lines = [f"{k}={v}" for k, v in sorted(java_lang.items())]
+                    with open(dst, "w", encoding="utf-8") as fh:
+                        fh.write("\n".join(lines))
+                    stats["copied"] += 1
+                except Exception:
+                    stats["errors"] += 1
+        import tempfile
+        tmp_dir = tempfile.mkdtemp(prefix="modmorpher_tp_")
+        skipped_samples: List[str] = []
+        try:
+            for entry in names:
+                entry_norm = entry.replace("\\", "/")
+                if not entry_norm.lower().endswith(".png") and not entry_norm.lower().endswith(".tga"):
+                    continue
+                lower = entry_norm.lower()
+
+                bedrock_subdir: Optional[str] = None
+                matched_prefix = ""
+                matched_prefix_len = 0
+                for java_prefix, br_sub in _JAVA_TO_BEDROCK_TEXTURE_PATHS:
+                    if lower.startswith(java_prefix):
+                        bedrock_subdir = br_sub
+                        matched_prefix = java_prefix
+                        matched_prefix_len = len(java_prefix)
+                        break
+                if bedrock_subdir is None:
+                    m = re.match(
+                        r"assets/[^/]+/textures/(?:(block|blocks)/|(item|items)/|(entity)/|(gui)/|(misc)/|(particle)/|(colormap)/|(environment)/|(painting)/)?",
+                        lower,
+                    )
+                    if m:
+                        grp = next((g for g in m.groups() if g), None)
+                        sub_map = {
+                            "block": "textures/blocks/",   "blocks": "textures/blocks/",
+                            "item":  "textures/items/",    "items":  "textures/items/",
+                            "entity": "textures/entity/",
+                            "gui":   "textures/ui/",
+                            "misc":  "textures/misc/",
+                            "particle": "textures/particle/",
+                            "colormap": "textures/colormap/",
+                            "environment": "textures/environment/",
+                            "painting": "textures/painting/",
+                        }
+                        bedrock_subdir = sub_map.get(grp, "textures/misc/")
+                        matched_prefix_len = len(m.group(0))
+                    else:
+                        stats["skipped"] += 1
+                        if len(skipped_samples) < 10:
+                            skipped_samples.append(entry_norm)
+                        continue
+                rel_after = entry_norm[matched_prefix_len:]
+                base_noext = os.path.splitext(os.path.basename(rel_after))[0]
+                sub_path   = os.path.dirname(rel_after).strip("/")
+                renamed_base = base_noext
+                is_block = "blocks" in bedrock_subdir
+                is_item  = "items"  in bedrock_subdir
+                if is_block and base_noext in _JAVA_BLOCK_RENAME_MAP:
+                    renamed_base = _JAVA_BLOCK_RENAME_MAP[base_noext]
+                    stats["renamed"] += 1
+                elif is_item and base_noext in _JAVA_ITEM_RENAME_MAP:
+                    renamed_base = _JAVA_ITEM_RENAME_MAP[base_noext]
+                    stats["renamed"] += 1
+                if sub_path:
+                    dst_rel = os.path.join(bedrock_subdir, sub_path, renamed_base + ".png")
+                else:
+                    dst_rel = os.path.join(bedrock_subdir, renamed_base + ".png")
+                dst = os.path.join(out_dir, dst_rel.replace("/", os.sep))
+                tmp_file = os.path.join(tmp_dir, renamed_base + ".png")
+                try:
+                    with _zf_open(entry) as src_fh:
+                        data = src_fh.read()
+                    with open(tmp_file, "wb") as fh:
+                        fh.write(data)
+                    ok = _resize_texture_for_bedrock(tmp_file, dst)
+                    if ok:
+                        stats["copied"] += 1
+                        tex_key = (
+                            dst_rel.replace("\\", "/")
+                            .replace("textures/blocks/", "")
+                            .replace("textures/items/", "")
+                            .replace(".png", "")
+                        )
+                        if is_block:
+                            block_texture_map[renamed_base] = (
+                                "textures/blocks/" + (
+                                    (sub_path + "/" if sub_path else "") + renamed_base
+                                )
+                            )
+                        elif is_item:
+                            item_texture_map[renamed_base] = (
+                                "textures/items/" + (
+                                    (sub_path + "/" if sub_path else "") + renamed_base
+                                )
+                            )
+                    else:
+                        stats["errors"] += 1
+                except Exception:
+                    stats["errors"] += 1
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        if skipped_samples:
+            _REAL_PRINT(
+                f"  [TexturePack] {stats['skipped']} texture(s) skipped (unrecognised path). "
+                f"First {len(skipped_samples)} examples:"
+            )
+            for s in skipped_samples:
+                _REAL_PRINT(f"    {s}")
+    terrain_texture = {
+        "resource_pack_name": pack_name,
+        "texture_name": "atlas.terrain",
+        "padding": 8,
+        "num_mip_levels": 4,
+        "texture_data": {
+            name: {"textures": [path]}
+            for name, path in sorted(block_texture_map.items())
+        },
+    }
+    with open(os.path.join(out_dir, "textures", "terrain_texture.json"), "w", encoding="utf-8") as fh:
+        json.dump(terrain_texture, fh, indent=2)
+    item_texture = {
+        "resource_pack_name": pack_name,
+        "texture_name": "atlas.items",
+        "texture_data": {
+            name: {"textures": [path]}
+            for name, path in sorted(item_texture_map.items())
+        },
+    }
+    with open(os.path.join(out_dir, "textures", "item_texture.json"), "w", encoding="utf-8") as fh:
+        json.dump(item_texture, fh, indent=2)
+    manifest = {
+        "format_version": 2,
+        "header": {
+            "name": pack_name,
+            "description": f"Converted from Java texture pack '{pack_stem}' by ModMorpher",
+            "uuid": str(uuid.uuid4()),
+            "version": [1, 0, 0],
+            "min_engine_version": [1, 21, 50],
+        },
+        "modules": [
+            {
+                "type": "resources",
+                "uuid": str(uuid.uuid4()),
+                "version": [1, 0, 0],
+            }
+        ],
+    }
+    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    mcpack_path = f"{pack_stem}_Bedrock.mcpack"
+    shutil.make_archive(f"{pack_stem}_Bedrock", "zip", out_dir)
+    os.rename(f"{pack_stem}_Bedrock.zip", mcpack_path)
+
+    _orig(
+        f"\n  [TexturePack] Done!\n"
+        f"    Textures copied : {stats['copied']}\n"
+        f"    Auto-renamed    : {stats['renamed']}\n"
+        f"    Skipped         : {stats['skipped']}\n"
+        f"    Errors          : {stats['errors']}\n"
+        f"    Output          : {mcpack_path}\n"
+    )
+    notes_path = f"{pack_stem}_conversion_notes.txt"
+    with open(notes_path, "w", encoding="utf-8") as fh:
+        fh.write(f"ModMorpher – Java Texture Pack Conversion Notes\n")
+        fh.write(f"Pack: {zip_path}\n")
+        fh.write(f"Output: {mcpack_path}\n\n")
+        fh.write(f"Textures copied : {stats['copied']}\n")
+        fh.write(f"Auto-renamed    : {stats['renamed']}  (Java → Bedrock filename mapping)\n")
+        fh.write(f"Skipped         : {stats['skipped']}  (paths outside known asset trees)\n")
+        fh.write(f"Errors          : {stats['errors']}\n\n")
+        fh.write(
+            "Notes:\n"
+            "- Animated textures (strips) have been cropped to their first frame.\n"
+            "  Bedrock uses flipbook_textures.json for animation; manual setup needed.\n"
+            "- GUI textures (assets/minecraft/textures/gui) are mapped to textures/ui/\n"
+            "  but most vanilla GUI elements are not replaceable on Bedrock.\n"
+            "- Custom shader / CIT / Optifine features are not supported on Bedrock.\n"
+            "- Drop the .mcpack into your Bedrock world's resource packs to activate it.\n"
+        )
+
+    return mcpack_path
+
+
 def main():
+    all_zips = [f for f in os.listdir(".") if f.lower().endswith(".zip")]
+    _REAL_PRINT(f"  [ModMorpher] Scanning for texture packs … ({len(all_zips)} .zip file(s) found)")
+    texture_zips = [z for z in all_zips if _is_java_texture_pack(z)]
+
+    if texture_zips:
+        _REAL_PRINT(
+            f"  [ModMorpher] Found {len(texture_zips)} Java texture pack(s): "
+            + ", ".join(texture_zips)
+        )
+        for tp_zip in texture_zips:
+            try:
+                convert_java_texture_pack(tp_zip)
+            except Exception as e:
+                import traceback
+                _REAL_PRINT(f"  [TexturePack] ERROR converting {tp_zip}: {e}")
+                _REAL_PRINT(traceback.format_exc())
+        has_jar = any(f.endswith(".jar") for f in os.listdir("."))
+        if not has_jar:
+            return
+    elif all_zips:
+        _REAL_PRINT(
+            f"  [ModMorpher] Found {len(all_zips)} .zip file(s) but none look like "
+            "a Java texture pack (need pack.mcmeta or assets/…/textures/*.png inside)."
+        )
+        for z in all_zips:
+            try:
+                import zipfile as _zf
+                with _zf.ZipFile(z) as _z:
+                    top = _z.namelist()[:8]
+                _REAL_PRINT(f"    {z}: {top}")
+            except Exception:
+                pass
+
     target_jar = next(
-        (f for f in os.listdir(".") if f.endswith(".jar")), 
+        (f for f in os.listdir(".") if f.endswith(".jar")),
         None
     )
 
     if not target_jar:
-        _warn("No target jar file found.")
+        _REAL_PRINT("  [ModMorpher] No .jar file found either. Nothing to do.")
         return
 
 
