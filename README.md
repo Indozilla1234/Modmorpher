@@ -18,7 +18,7 @@ ModMorpher tries to take a Minecraft Java mod and spit out a Bedrock add-on (`.m
 ---
 
 ## what works best
-This is made for **MCreator mods built with Forge / NeoForge**.
+This is made for **mods built with Forge / NeoForge**.
 
 | Minecraft | loader | how reliable it is |
 |---|---|---|
