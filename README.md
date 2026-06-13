@@ -1,73 +1,76 @@
-# ModMorpher - Java → Bedrock migration thing
+# ModMorpher - Java Mod → Bedrock Addon
 
-         trying to convert mods since June 9th 2025
+         Trying to Convert Mods Since June 9th 2025
 
-⚠️ Heads up: this script will auto-install Python packages (`javalang`, `Pillow`, etc) the first time you run it. It’s annoying, but it’s required.
+ModMorpher is an experimental conversion tool. Because Java and Bedrock use fundamentally different modding systems, manual fixes should be expected after conversion.
 
-ModMorpher tries to take a Minecraft Java mod and spit out a Bedrock add-on (`.mcaddon`). It’s not perfect, sometimes it breaks things, but it usually gets you close enough to tweak manually.
+⚠️ this script will auto-install Python packages (`javalang`, `Pillow`, etc) the first time you run it.
 
----
-
-## what it does (sorta)
-- reads Java class/source/jar stuff and makes a best guess at Bedrock / component equivalents
-- converts GeckoLib animation ids into Bedrock `.animation.json` + controller stubs
-- extracts textures/models/sounds from the jar into a Bedrock pack
-- tries to “translate” common NBT/logic patterns, but it’s not magic
-- custom logic thingys to the Bedrock Scripting API
+ModMorpher tries to take a Minecraft Java mod and produce a Bedrock add-on (`.mcaddon`). It’s not perfect, sometimes it breaks things, but it usually gets you close enough to tweak manually.
 
 ---
 
-## what works best
-This is made for **mods built with Forge / NeoForge**.
+## What it Does
+- 1. It first calls my custom wrapper for Vineflower(ClassDecompiler.jar) to decompile the mod you provide
+- 2. Extracts textures/models/sounds from the jar into the Resource Pack in the /Bedrock_Pack folder
+- 3. It cycles through and attempts to convert java logic to its bedrock equivalent
+- 4. It then packages everything into Bedrock_Pack.mcaddon, ready for bedrock or tweaking. And deletes /src_[mod]
+
+---
+
+## What Works Best
+This is made for **mods made with Forge / NeoForge**.
 
 | Minecraft | loader | how reliable it is |
 |---|---|---|
 | 1.20.1+ | NeoForge | decent, but expect some manual fixing |
-| 1.19.2-1.20.1 | Forge | best chance |
-| 1.12+ | Forge | will probably need manual fixes |
-| 1.3+ | Forge | not really worth it |
-| 1.20.1+ | Fabric / Quilt | not worth it, kinda have support( not really), but still would NOT RECOMEND
+| 1.19.2-1.20.1 | Forge | Best Shot|
+| 1.12+ | Forge | Works decently, manual tweaking may be needed. |
+| 1.3+ | Forge | experimental |
+| 1.20.1+ | Fabric / Quilt | experimental |
 
-> Hand-made mods can sometimes work, but you’ll often end up having to fix things by hand.
 
 ---
 
-## requirements
+## Requirements
 - Python 3.10+ on your PATH
 - OpenJDK 21+ (needed for the decompiler)
 
 ---
 
-## quick run
+## How To Run
 1. Put your compiled `.jar` in this folder (project root).
 2. Run:
    ```bash
    python modmorpher.py
    ```
-3. When it's done, you should have `Bedrock_Pack.mcaddon` in this folder.
-
-There will also be a `Bedrock_Pack/` folder with the raw pack structure if you want to poke around.
+3. Use or tweak Bedrock_Pack.mcaddon
 
 ---
 
-## keep in mind
-- It installs deps automatically. If it crashes the first time, try running it again.
-- It won’t convert everything. Complex AI, special animations, and weird NBT stuff usually need manual fixing.
+## Keep in Mind
+- It installs dependecies automatically. If it fails the first time, try running it again.
 - Treat the output as a starting point, not a finished pack.
-- If it “fails silently”, check the terminal output — it usually gives a clue.
 
 ---
 
 
 
-## why the license stuff is here
+## Why The License Stuff is Here
 This project is meant to help mod creators & players, not to pirate people’s work.
 If you’re converting someone else’s ARR or non-permissive mod, make sure you have permission.
 
 
 ---
 
-That’s it. It’s a messy tool that tries to do a lot. If it breaks, blame Minecraft Bedrock and maybe the spacetime continuum. ;)
+## Limitations
+
+ModMorpher does NOT:
+- fully convert Java mods into working Bedrock equivalents
+- guarantee functional gameplay logic conversion
+- support all Forge/Fabric mod features
+- handle complex rendering systems perfectly
+
 
 
    
