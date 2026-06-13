@@ -23,7 +23,7 @@ This is made for **mods built with Forge / NeoForge**.
 | Minecraft | loader | how reliable it is |
 |---|---|---|
 | 1.20.1+ | NeoForge | decent, but expect some manual fixing |
-| 1.18+ | Forge | best chance |
+| 1.19.2-1.20.1 | Forge | best chance |
 | 1.12+ | Forge | will probably need manual fixes |
 | 1.3+ | Forge | not really worth it |
 | 1.20.1+ | Fabric / Quilt | not worth it, kinda have support( not really), but still would NOT RECOMEND
