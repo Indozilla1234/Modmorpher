@@ -32,7 +32,7 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.6.1.2 'Blocks, AGAIN'"
+Tool_Version = "1.6.1.3 'Blocks, AGAIN, AGAIN!'"
 DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
@@ -1905,15 +1905,35 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
         tex_size = classic.get("texture_size", [16, 16])
         if not elements and not groups:
             raise ValueError("Model must contain either 'elements' or 'groups'")
-        def extract_uv(element: dict) -> list:
+        if not isinstance(tex_size, list) or len(tex_size) < 2:
+            tex_size = [16, 16]
+        try:
+            tex_width = int(tex_size[0])
+            tex_height = int(tex_size[1])
+        except (ValueError, TypeError):
+            tex_width, tex_height = 16, 16
+        def extract_face_uvs(element: dict) -> dict:
+            # Build an explicit per-face UV mapping so the texture is applied
+            # to every face of the cube individually, instead of relying on
+            # Bedrock's "box UV" auto-unwrap (a single [u, v] origin), which
+            # stretches/cuts up the texture across the whole cube net unless
+            # the source image happens to be sized like a Java unwrap atlas.
             faces = element.get("faces", {})
+            result = {}
             for face_name in ["north", "south", "east", "west", "up", "down"]:
-                if face_name in faces:
-                    face_data = faces[face_name]
-                    uv = face_data.get("uv", [0, 0, 16, 16])
-                    if isinstance(uv, list) and len(uv) >= 4:
-                        return [float(uv[0]), float(uv[1])]
-            return [0.0, 0.0]
+                face_data = faces.get(face_name)
+                uv = face_data.get("uv") if isinstance(face_data, dict) else None
+                if isinstance(uv, list) and len(uv) >= 4:
+                    u, v = float(uv[0]), float(uv[1])
+                    w, h = float(uv[2]) - u, float(uv[3]) - v
+                else:
+                    # No UV specified for this face (or the face is missing
+                    # entirely) - default to the full texture so the face
+                    # still gets the texture rather than being left blank
+                    # or inheriting another face's stretched mapping.
+                    u, v, w, h = 0.0, 0.0, float(tex_width), float(tex_height)
+                result[face_name] = {"uv": [u, v], "uv_size": [w, h]}
+            return result
         def convert_rotation(rot: dict) -> dict:
             if not isinstance(rot, dict):
                 return {"x": 0, "y": 0, "z": 0}
@@ -1940,7 +1960,7 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
                 "size": [float(to_pos[0]) - float(from_pos[0]),
                         float(to_pos[1]) - float(from_pos[1]),
                         float(to_pos[2]) - float(from_pos[2])],
-                "uv": extract_uv(el),
+                "uv": extract_face_uvs(el),
             }
             if "rotation" in el:
                 cube["rotation"] = convert_rotation(el["rotation"])
@@ -1992,13 +2012,6 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
                 bones.append(root)
         if not bones:
             raise ValueError("No valid bones could be created from the model")
-        if not isinstance(tex_size, list) or len(tex_size) < 2:
-            tex_size = [16, 16]
-        try:
-            tex_width = int(tex_size[0])
-            tex_height = int(tex_size[1])
-        except (ValueError, TypeError):
-            tex_width, tex_height = 16, 16
         return {
             "format_version": "1.12.0",
             "minecraft:geometry": [
@@ -2658,7 +2671,24 @@ def validate_geckolib_geometry(geo_data: dict, model_name: str) -> List[str]:
                     for field in ["origin", "size", "uv"]:
                         if field not in cube:
                             warnings.append(f"Bone '{bone.get('name', i)}' cube {j} missing '{field}' field")
-                        elif not isinstance(cube[field], list) or len(cube[field]) != (3 if field != "uv" else 2):
+                            continue
+                        value = cube[field]
+                        if field == "uv":
+                            valid_box_uv = isinstance(value, list) and len(value) == 2
+                            valid_per_face_uv = (
+                                isinstance(value, dict)
+                                and all(
+                                    isinstance(value.get(face), dict)
+                                    and isinstance(value[face].get("uv"), list)
+                                    and len(value[face]["uv"]) == 2
+                                    and isinstance(value[face].get("uv_size"), list)
+                                    and len(value[face]["uv_size"]) == 2
+                                    for face in ("north", "south", "east", "west", "up", "down")
+                                )
+                            )
+                            if not (valid_box_uv or valid_per_face_uv):
+                                warnings.append(f"Bone '{bone.get('name', i)}' cube {j} '{field}' has wrong format")
+                        elif not isinstance(value, list) or len(value) != 3:
                             warnings.append(f"Bone '{bone.get('name', i)}' cube {j} '{field}' has wrong format")
             parent = bone.get("parent")
             if parent is not None:
@@ -8470,8 +8500,6 @@ def _build_block_definition(block_id: str, safe_name: str, namespace: str, java_
     has_geo = any(os.path.exists(os.path.join(geo_dir, c)) for c in geo_candidates)
     if has_geo:
         comps["minecraft:geometry"] = f"geometry.{safe_name}"
-    if "log" in safe_name or "pillar" in safe_name.lower() or re.search(r'\bRotatedPillarBlock\b', search_text):
-        comps["minecraft:geometry"] = "geometry.log"
     states = {}
     permutations = []
     if re.search(r'BlockStateProperties\.FACING|DirectionProperty', search_text, re.I):
