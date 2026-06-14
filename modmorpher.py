@@ -10,9 +10,10 @@ import sys
 import math
 import subprocess
 import re
+import copy
 from typing import Optional, Tuple, Dict, Set, List, Union
 
-DEBUG_MODE = 0
+DEBUG_MODE = 1
 
 _REAL_PRINT = builtins.print
 def _silent_print(*args, **kwargs):
@@ -31,7 +32,7 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.6.1.1 'the Red Pill or The Blue Pill?'"
+Tool_Version = "1.6.1.2 'Blocks, AGAIN'"
 DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
@@ -1861,6 +1862,7 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                                 with open(dest, "w", encoding="utf-8") as fh:
                                     json.dump(j, fh, indent=2)
+                                _mirror_bp_block_to_rp(j, destname)
                                 continue
                             if "minecraft:client_entity" in j or "minecraft:entity" in j:
                                 destname = sanitize_identifier(os.path.splitext(os.path.basename(file))[0]) + ".entity.json"
@@ -5035,7 +5037,7 @@ def extract_block_properties_from_java(java_code: str):
     m3 = re.search(r'Material\.([A-Z_]+)', java_code)
     if m3:
         props["material"] = m3.group(1).lower()
-    m_ll_lambda = re.search(r'\.lightLevel\s*\(\s*(?:state\s*->|[a-z]+\s*->)\s*([0-9]+)\s*\)', java_code)
+    m_ll_lambda = re.search(r'\.lightLevel\s*\(\s*\(?\s*[a-zA-Z_]\w*\s*\)?\s*->\s*([0-9]+)\s*\)', java_code)
     if m_ll_lambda:
         try: props["light_emission"] = min(15, int(m_ll_lambda.group(1)))
         except Exception: pass
@@ -5060,10 +5062,10 @@ def extract_block_properties_from_java(java_code: str):
         m_rl = re.search(r'new\s+ResourceLocation\s*\(\s*["\']([a-z0-9_:-]+)["\']', java_code, re.I)
         if m_rl:
             props["texture_hint"] = m_rl.group(1).split(":")[-1]
-    m6 = re.search(r'getLootTable\(\)\s*.*?["\']([a-z0-9_:-/]+)["\']', java_code, re.I | re.DOTALL)
+    m6 = re.search(r'getLootTable\(\)\s*.*?["\']([a-z0-9_:/-]+)["\']', java_code, re.I | re.DOTALL)
     if m6:
         props["loot_table"] = m6.group(1)
-    m7 = re.search(r'lootTable\(\s*["\']([a-z0-9_:-/]+)["\']', java_code, re.I)
+    m7 = re.search(r'lootTable\(\s*["\']([a-z0-9_:/-]+)["\']', java_code, re.I)
     if m7:
         props["loot_table"] = m7.group(1)
     if re.search(r'\.noOcclusion\(\)|noCollission\(\)|noOcclusionBlock\(\)', java_code):
@@ -5071,6 +5073,36 @@ def extract_block_properties_from_java(java_code: str):
     if re.search(r'\.noCollission\(\)|noCollision\(\)', java_code):
         props["is_solid"] = False
     return props
+def _looks_like_item_artifact(java_code: str, block_basename: str) -> bool:
+    name = sanitize_identifier(block_basename or "")
+    if not name:
+        return False
+    item_markers = (
+        "spawn_egg", "egg", "item", "meat", "food", "logo", "effect",
+        "potion", "bucket", "ingot", "nugget", "dust", "gem", "shard",
+        "disc", "record", "music", "armor", "tool", "weapon",
+        "drops", "drop", "fluid", "fluidbucket", "mask", "icon",
+    )
+    block_markers = (
+        "log", "plank", "planks", "slab", "stairs", "stair", "wall",
+        "ore", "stone", "deepslate", "dirt", "sand", "gravel", "glass",
+        "wool", "bed", "leaf", "leaves", "mushroom", "root", "crop",
+        "fence", "pane", "door", "trapdoor",
+    )
+    name_is_itemy = any(m in name for m in item_markers)
+    name_is_blocky = any(m in name for m in block_markers)
+    code = (java_code or "").lower()
+    code_itemy = bool(re.search(r'\bextends\s+(?:item|blockitem|spawneggitem|food|fooditem|armoritem|sworditem|pickaxeitem|axeitem|shovelitem|hoeitem|diggeritem|tridentitem)\b', code, re.I)) or any(tok in code for tok in ["minecraft:item", "creativemodetab", "foodproperties", "max_stack_size"])
+    code_blocky = bool(re.search(r'\bextends\s+(?:block|rotatedpillarblock|bushblock|sandblock|leavesblock|liquidblock|stairblock|slabblock|fenceblock|glazedterracottablock)\b', code, re.I)) or any(tok in code for tok in ["minecraft:block", "material_instances", "destroy_time", "explosion_resistance"])
+    if code_itemy and not code_blocky:
+        return True
+    if name_is_itemy and not name_is_blocky:
+        return True
+    if name_is_itemy and ("spawn_egg" in name or "effect" in name or "logo" in name or "meat" in name):
+        return True
+    return False
+
+
 def convert_java_block_to_bedrock(java_path: str, namespace: str):
     try:
         with open(java_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -5079,6 +5111,10 @@ def convert_java_block_to_bedrock(java_path: str, namespace: str):
         _warn(f" Failed to read block java {java_path}: {e}")
         return
     block_basename = os.path.splitext(os.path.basename(java_path))[0]
+    if _looks_like_item_artifact(java_code, block_basename):
+        _warn(f" Redirecting obvious item-like block artifact to item converter: {java_path}")
+        convert_java_item_to_bedrock(java_path, namespace)
+        return
     block_id = f"{sanitize_identifier(namespace)}:{sanitize_identifier(block_basename)}"
     props = extract_block_properties_from_java(java_code)
     block_json = {
@@ -5105,8 +5141,10 @@ def convert_java_block_to_bedrock(java_path: str, namespace: str):
     if sound_profile:
         BLOCK_SOUND_PROFILES[block_id] = sound_profile
     comps["_converter_metadata"] = {"source_java_file": os.path.basename(java_path), "parsed_props": props, "sound_profile": sound_profile}
-    out_path = os.path.join(BP_FOLDER, "blocks", f"{sanitize_identifier(block_basename)}.json")
+    safe_name = sanitize_identifier(block_basename)
+    out_path = os.path.join(BP_FOLDER, "blocks", f"{safe_name}.json")
     safe_write_json(out_path, block_json)
+    _mirror_bp_block_to_rp(block_json, safe_name)
 
 def extract_item_properties_from_java(java_code: str):
     props = {
@@ -5239,6 +5277,40 @@ NON_ENTITY_KEYWORDS = [
     "serializer", "codec", "datafixer", "loot", "structure"
 ]
 ENTITY_OVERRIDE_KEYWORDS = ["entity", "mob", "monster", "creature", "animal", "boss", "npc"]
+SOUND_ARTIFACT_KEYWORDS = [
+    "sound", "sounds", "sfx", "audio", "voice", "whisper", "scream",
+    "roar", "howl", "growl", "ambient", "music", "song", "jingle",
+    "note", "soundevent", "soundsource", "soundinstance", "playsound",
+]
+
+def _is_sound_artifact(java_code: str, filename: str = '', cls_name: Optional[str] = None) -> bool:
+    """Best-effort filter for sound registries / audio-only classes.
+
+    This keeps sound source files out of the block/item/entity scanners even when
+    their names are a little generic (for example, `scream_1`).
+    """
+    haystack = ' '.join([
+        str(cls_name or ''),
+        os.path.basename(filename) or '',
+        os.path.splitext(os.path.basename(filename))[0] if filename else '',
+        java_code[:2000] if java_code else '',
+    ]).lower()
+
+    if any(k in haystack for k in ("soundevent", "soundsource", "soundinstance", "playsound", "sounds.json")):
+        return True
+
+    if any(k in haystack for k in (
+        "assets/", "/sounds/", "/sound/", "sound/", "sounds/", "sfx/", "audio/"
+    )):
+        return True
+
+    if any(k in haystack for k in SOUND_ARTIFACT_KEYWORDS):
+
+        if any(k in haystack for k in ("register", "registry", "soundevent", "playsound", "soundsource", "soundinstance")):
+            return True
+
+    return False
+
 _ENTITY_SUPERCLASSES = {
     'Entity', 'Mob', 'Monster', 'Animal', 'PathfinderMob',
     'TamableAnimal', 'TameableAnimal',
@@ -8336,6 +8408,9 @@ def find_best_texture_match(safe_name: str, subfolder: str) -> str:
     if best_score > 0:
         return best
     return safe_name
+_ITEM_BASES = r'Item|SwordItem|PickaxeItem|ShovelItem|AxeItem|HoeItem|ArmorItem|BowItem|ShieldItem|FoodOnAStickItem|ThrowablePotionItem|TieredItem|DiggerItem|BlockItem|DoubleHighBlockItem|StandingAndWallBlockItem'
+_BLOCK_BASES = r'Block|BaseBlock|HalfTransparentBlock|BushBlock|FlowerBlock|SaplingBlock|CropBlock|TrapDoorBlock|DoorBlock|FenceBlock|WallBlock|StairBlock|SlabBlock|PressurePlateBlock|ButtonBlock|LeverBlock|TorchBlock|RedStoneWireBlock|ChestBlock|FurnaceBlock|LiquidBlock|GrassBlock|RotatedPillarBlock|HorizontalDirectionalBlock|DirectionalBlock'
+
 JAVA_BLOCK_MATERIAL_MAP = {
     "WOOD": "wood", "STONE": "stone", "METAL": "metal", "SAND": "sand",
     "GLASS": "glass", "CLOTH": "wool", "PLANT": "plant", "DIRT": "dirt",
@@ -8343,12 +8418,22 @@ JAVA_BLOCK_MATERIAL_MAP = {
     "SPONGE": "sponge", "WATER": "water", "LAVA": "lava",
     "FIRE": "decoration", "DECORATION": "decoration",
 }
-def convert_java_block_full(java_code: str, java_path: str, namespace: str):
-    cls = extract_class_name(java_code) or os.path.splitext(os.path.basename(java_path))[0]
-    safe_name = clean_java_artifact_name(cls)
-    block_id = f"{namespace}:{safe_name}"
-    props = extract_block_properties_from_java(java_code)
-    mat_raw = re.search(r'Material\.([A-Z_]+)', java_code)
+def _build_block_definition(block_id: str, safe_name: str, namespace: str, java_code: str, block_class_name: str = "") -> dict:
+    """Build a Bedrock block behaviour-pack JSON document from Java source/property text.
+
+    `java_code` may be the full source of a class extending Block (class-based
+    conversion), or just the relevant registration/properties snippet plus any
+    anonymous-class body (registry-based conversion). `block_class_name` is the
+    Java class actually being instantiated (e.g. "RotatedPillarBlock", "StairBlock",
+    "Block", or a custom subclass name) and is folded into the text searched for
+    state/geometry hints so registry-based entries get the same heuristics as
+    class-based ones.
+    """
+    search_text = java_code
+    if block_class_name:
+        search_text = block_class_name + "\n" + java_code
+    props = extract_block_properties_from_java(search_text)
+    mat_raw = re.search(r'Material\.([A-Z_]+)', search_text)
     material_key = mat_raw.group(1) if mat_raw else ""
     material = JAVA_BLOCK_MATERIAL_MAP.get(material_key, "stone")
     hardness = props.get("destroy_time") if props.get("destroy_time") is not None else 2.0
@@ -8385,11 +8470,11 @@ def convert_java_block_full(java_code: str, java_path: str, namespace: str):
     has_geo = any(os.path.exists(os.path.join(geo_dir, c)) for c in geo_candidates)
     if has_geo:
         comps["minecraft:geometry"] = f"geometry.{safe_name}"
-    if "log" in safe_name or "pillar" in safe_name.lower():
+    if "log" in safe_name or "pillar" in safe_name.lower() or re.search(r'\bRotatedPillarBlock\b', search_text):
         comps["minecraft:geometry"] = "geometry.log"
     states = {}
     permutations = []
-    if re.search(r'BlockStateProperties\.FACING|DirectionProperty', java_code, re.I):
+    if re.search(r'BlockStateProperties\.FACING|DirectionProperty', search_text, re.I):
         states["facing"] = ["north", "south", "east", "west", "up", "down"]
         rot_map = {"north": 0, "south": 180, "east": 90, "west": 270}
         for d, rot in rot_map.items():
@@ -8397,35 +8482,195 @@ def convert_java_block_full(java_code: str, java_path: str, namespace: str):
                 "condition": f'query.block_property("{namespace}:facing") == "{d}"',
                 "components": {"minecraft:transformation": {"rotation": [0, rot, 0]}}
             })
-    if re.search(r'BlockStateProperties\.POWERED|BooleanProperty.*power', java_code, re.I):
+    if re.search(r'BlockStateProperties\.POWERED|BooleanProperty.*power', search_text, re.I):
         states["powered"] = [False, True]
         permutations.append({
             "condition": f'query.block_property("{namespace}:powered") == true',
             "components": {"minecraft:light_emission": min(15, light_emission + 8)}
         })
-    if re.search(r'BlockStateProperties\.WATERLOGGED', java_code, re.I):
+    if re.search(r'BlockStateProperties\.WATERLOGGED', search_text, re.I):
         states["waterlogged"] = [False, True]
-    if re.search(r'BlockStateProperties\.OPEN|BooleanProperty.*open', java_code, re.I):
+    if re.search(r'BlockStateProperties\.OPEN|BooleanProperty.*open', search_text, re.I):
         states["open"] = [False, True]
-    if re.search(r'BlockStateProperties\.LIT|BooleanProperty.*lit', java_code, re.I):
+    if re.search(r'BlockStateProperties\.LIT|BooleanProperty.*lit', search_text, re.I):
         states["lit"] = [False, True]
         permutations.append({
             "condition": f'query.block_property("{namespace}:lit") == true',
             "components": {"minecraft:light_emission": 15}
         })
-    if re.search(r'IntegerProperty.*age|BlockStateProperties\.AGE', java_code, re.I):
-        m_age = re.search(r'IntegerProperty\.create\s*\([^,]+,\s*\d+,\s*(\d+)', java_code)
+    if re.search(r'IntegerProperty.*age|BlockStateProperties\.AGE', search_text, re.I):
+        m_age = re.search(r'IntegerProperty\.create\s*\([^,]+,\s*\d+,\s*(\d+)', search_text)
         max_age = int(m_age.group(1)) if m_age else 7
         states["age"] = list(range(max_age + 1))
-    if re.search(r'HORIZONTAL_FACING|HorizontalDirectionalBlock', java_code, re.I):
+    if re.search(r'HORIZONTAL_FACING|HorizontalDirectionalBlock', search_text, re.I):
         if "facing" not in states:
             states["facing"] = ["north", "south", "east", "west"]
+    if re.search(r'\bStairBlock\b', search_text):
+        states["facing"] = ["north", "south", "east", "west"]
+        states["upside_down_bit"] = [False, True]
+    if re.search(r'\bSlabBlock\b', search_text):
+        states.setdefault("top_slot_bit", [False, True])
     if states:
         doc["minecraft:block"]["description"]["states"] = {f"{namespace}:{k}": v for k, v in states.items()}
     if permutations:
         doc["minecraft:block"]["permutations"] = permutations
+    return doc
+
+def convert_java_block_full(java_code: str, java_path: str, namespace: str):
+    cls = extract_class_name(java_code) or os.path.splitext(os.path.basename(java_path))[0]
+    safe_name = clean_java_artifact_name(cls)
+    block_id = f"{namespace}:{safe_name}"
+    doc = _build_block_definition(block_id, safe_name, namespace, java_code, block_class_name=cls)
     generate_block_script(java_code, safe_name, block_id, namespace)
     _finish_block_json(doc, safe_name)
+
+
+_BLOCK_REGISTRY_VAR_RE = re.compile(
+    r'DeferredRegister\s*(?:'
+        r'<\s*(?:[\w.]*\.)?Block\s*>'  
+        r'|'
+        r'\.Blocks\b'      
+    r')\s+(\w+)\s*=\s*DeferredRegister\.create(?:Blocks)?\s*\('
+)
+
+_FABRIC_BLOCK_REGISTRY_RE = re.compile(
+    r'Registry\.register\s*\(\s*(?:Registries\.BLOCK|Registry\.BLOCK|BuiltInRegistries\.BLOCK)\s*,',
+    re.I
+)
+
+def _block_class_extends_block(class_name: str, cls_to_code: Dict[str, str]) -> bool:
+    if not class_name:
+        return False
+    if class_name == "Block" or re.search(rf'\b(?:{_BLOCK_BASES})\b', class_name):
+        return True
+    if class_name in cls_to_code:
+        return bool(re.search(rf'\bextends\s+(?:{_BLOCK_BASES})\b', cls_to_code[class_name]))
+    return False
+
+def scan_block_registrations(java_files: Dict[str, str], namespace: str, stats: Optional[dict] = None) -> Tuple[set, set]:
+    """Scan registry classes for `BLOCKS.register(...)`-style block declarations
+    that the class-based scanner can't see, and emit a block JSON for each.
+
+    Returns (handled_block_names, handled_files):
+      - handled_block_names: set of `safe_name`s that were written out here
+      - handled_files: set of source file paths that should be skipped by the
+        class-based block scanner (the registry file itself, plus any custom
+        block subclass file whose properties were folded into a registration)
+    """
+    handled_block_names: set = set()
+    handled_files: set = set()
+
+    cls_to_code: Dict[str, str] = {}
+    cls_to_path: Dict[str, str] = {}
+    for path, code in java_files.items():
+        cls = extract_class_name(code)
+        if cls:
+            cls_to_code[cls] = code
+            cls_to_path[cls] = path
+
+    for path, raw_code in java_files.items():
+        if _is_sound_artifact(raw_code, path, extract_class_name(raw_code)):
+            continue
+
+        code = _strip_java_comments(raw_code)
+        registrations = [] 
+
+  
+        reg_vars = set(m.group(1) for m in _BLOCK_REGISTRY_VAR_RE.finditer(code))
+        for var in reg_vars:
+            for m in re.finditer(rf'\b{re.escape(var)}\s*\.\s*(\w+)\s*\(', code):
+                method = m.group(1)
+                if not method.lower().startswith("register"):
+                    continue
+                open_paren = m.end() - 1
+                args_text = _extract_paren_block(code, open_paren)
+                name_m = re.search(r'"([a-zA-Z0-9_./]+)"', args_text)
+                if not name_m:
+                    continue
+                reg_name = name_m.group(1)
+                rest = args_text[name_m.end():].lstrip(' \t\r\n,')
+
+                lam_m = re.match(r'(?:\(\)\s*->|\w+\s*->)\s*new\s+([A-Za-z_]\w*)\s*\(', rest)
+                if lam_m:
+                    block_class = lam_m.group(1)
+                    ctor_open = lam_m.end() - 1
+                    props_text = _extract_paren_block(rest, ctor_open)
+                    after = rest[ctor_open + len(props_text) + 2:].lstrip()
+                    extra_body = _extract_block(after, 0) if after.startswith('{') else ""
+                    registrations.append((reg_name, block_class, props_text, extra_body))
+                    continue
+
+                ctorref_m = re.match(r'([A-Za-z_]\w*)\s*::\s*new\s*,', rest)
+                if ctorref_m:
+                    block_class = ctorref_m.group(1)
+                    props_text = rest[ctorref_m.end():].strip()
+                    registrations.append((reg_name, block_class, props_text, ""))
+                    continue
+
+                if method.lower() == "registersimpleblock":
+                    registrations.append((reg_name, "Block", rest, ""))
+                    continue
+
+                new_m = re.match(r'new\s+([A-Za-z_]\w*)\s*\(', rest)
+                if new_m:
+                    block_class = new_m.group(1)
+                    ctor_open = new_m.end() - 1
+                    props_text = _extract_paren_block(rest, ctor_open)
+                    registrations.append((reg_name, block_class, props_text, ""))
+                    continue
+        for m in _FABRIC_BLOCK_REGISTRY_RE.finditer(code):
+            open_paren = code.index('(', m.start())
+            args_text = _extract_paren_block(code, open_paren)
+            name_m = re.search(r'"([a-zA-Z0-9_./]+)"\s*\)', args_text)
+            if not name_m:
+                continue
+            reg_name = name_m.group(1)
+            rest = args_text[name_m.end():].lstrip(' \t\r\n,')
+            new_m = re.match(r'new\s+([A-Za-z_]\w*)\s*\(', rest)
+            if new_m:
+                block_class = new_m.group(1)
+                ctor_open = rest.index('(', new_m.start())
+                props_text = _extract_paren_block(rest, ctor_open)
+                registrations.append((reg_name, block_class, props_text, ""))
+
+        for m in re.finditer(r'\bregister\w*\s*\(\s*"([a-zA-Z0-9_./]+)"\s*,\s*new\s+([A-Za-z_]\w*)\s*\(', code, re.I):
+            reg_name, block_class = m.group(1), m.group(2)
+            if not _block_class_extends_block(block_class, cls_to_code):
+                continue
+            ctor_open = m.end() - 1
+            props_text = _extract_paren_block(code, ctor_open)
+            registrations.append((reg_name, block_class, props_text, ""))
+
+        if not registrations:
+            continue
+
+        for reg_name, block_class, props_text, extra_body in registrations:
+            safe_name = sanitize_identifier(reg_name.split('/')[-1].split(':')[-1])
+            if not safe_name or safe_name in handled_block_names:
+                continue
+            block_id = f"{namespace}:{safe_name}"
+
+            combined_parts = [props_text, extra_body]
+            custom_path = cls_to_path.get(block_class)
+            if custom_path:
+                combined_parts.append(cls_to_code.get(block_class, ""))
+                handled_files.add(custom_path)
+            combined_code = "\n".join(p for p in combined_parts if p)
+
+            try:
+                doc = _build_block_definition(block_id, safe_name, namespace, combined_code, block_class_name=block_class)
+                generate_block_script(combined_code, safe_name, block_id, namespace)
+                _finish_block_json(doc, safe_name)
+                handled_block_names.add(safe_name)
+                handled_files.add(path)
+                if stats is not None:
+                    stats.setdefault("converted_blocks", []).append(f"{path} :: {reg_name}")
+            except Exception as e:
+                _warn(f" Failed to convert registered block '{reg_name}' from {os.path.basename(path)}: {e}")
+                if stats is not None:
+                    stats.setdefault("errors", []).append(f"{path} :: {reg_name}: {e}")
+
+    return handled_block_names, handled_files
 _BLOCK_EVENT_METHOD_MAP = {
     "use":             ("afterEvents", "playerInteractWithBlock", "event.player"),
     "attack":          ("afterEvents", "playerInteractWithBlock", "event.player"),
@@ -8545,9 +8790,28 @@ def generate_block_script(java_code: str, safe_name: str, block_id: str, namespa
     return True
 
 def _finish_block_json(doc: dict, safe_name: str) -> None:
-    out_path = os.path.join(BP_FOLDER, "blocks", f"{safe_name}.json")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    safe_write_json(out_path, doc)
+    bp_path = os.path.join(BP_FOLDER, "blocks", f"{safe_name}.json")
+    rp_path = os.path.join(RP_FOLDER, "blocks", f"{safe_name}.json")
+    os.makedirs(os.path.dirname(bp_path), exist_ok=True)
+    os.makedirs(os.path.dirname(rp_path), exist_ok=True)
+    safe_write_json(bp_path, doc)
+    safe_write_json(rp_path, copy.deepcopy(doc))
+
+
+def _mirror_bp_block_to_rp(doc: dict, safe_name: str) -> None:
+    rp_path = os.path.join(RP_FOLDER, "blocks", f"{safe_name}.json")
+    os.makedirs(os.path.dirname(rp_path), exist_ok=True)
+    rp_doc = copy.deepcopy(doc)
+    try:
+        if isinstance(rp_doc, dict):
+            block = rp_doc.get("minecraft:block")
+            if isinstance(block, dict):
+                comps = block.get("components")
+                if isinstance(comps, dict):
+                    comps.pop("_converter_metadata", None)
+    except Exception:
+        pass
+    safe_write_json(rp_path, rp_doc)
 
 _EFFECT_NAME_MAP = {
     "SPEED": "speed", "SLOWNESS": "slowness", "HASTE": "haste",
@@ -10550,13 +10814,23 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
             desc = (data.get("minecraft:block") or {}).get("description", {})
             ident: str = desc.get("identifier", "")
             plain = ident.split(":")[-1] if ":" in ident else os.path.splitext(fname)[0]
+            rp_block_names = set()
+            if os.path.isdir(rp_blocks_dir):
+                rp_block_names = {
+                    n.lower()
+                    for n in os.listdir(rp_blocks_dir)
+                    if n.lower().endswith(".json")
+                }
             has_rp = (
                 plain in terrain_keys
                 or ident in terrain_keys
-                or (os.path.isdir(rp_blocks_dir) and fname in os.listdir(rp_blocks_dir))
+                or fname.lower() in rp_block_names
+                or os.path.splitext(fname)[0].lower() in rp_block_names
             )
             if not has_rp:
-                _remove(fpath, "BP block JSON has no terrain_texture entry or RP block definition")
+                removed.append(
+                    f"[warn] {_rel(fpath)}: BP block JSON has no terrain_texture entry or RP block definition"
+                )
 
  
     for folder in [RP_FOLDER, BP_FOLDER]:
@@ -11956,6 +12230,8 @@ def run_pipeline(source_root: str = "."):
         gecko_maps    = build_geckolib_mappings(".")
         geom_file_map, geom_ns_map = load_geometry_identifiers()
         anim_key_map  = load_animation_keys()
+    with _logger.phase("Scanning block registries", total=0, unit="step", colour="blue"):
+        registry_block_names, registry_block_files = scan_block_registrations(java_files, namespace, stats)
     total_files = len(java_files)
     with _logger.phase("Converting Java files", total=total_files, unit="file", colour="cyan") as bar:
         for path, code in java_files.items():
@@ -11971,9 +12247,7 @@ def run_pipeline(source_root: str = "."):
                 fname_block_hint  = lname.endswith("block.java") or "_block" in lname
                 fname_entity_hint = any(k in lname for k in ENTITY_OVERRIDE_KEYWORDS)
                 fname_noise       = any(k in lname for k in NON_ENTITY_KEYWORDS) and not fname_entity_hint
-
-                _ITEM_BASES = r'Item|SwordItem|PickaxeItem|ShovelItem|AxeItem|HoeItem|ArmorItem|BowItem|ShieldItem|FoodOnAStickItem|ThrowablePotionItem|TieredItem|DiggerItem|BlockItem|DoubleHighBlockItem|StandingAndWallBlockItem'
-                _BLOCK_BASES = r'Block|BaseBlock|HalfTransparentBlock|BushBlock|FlowerBlock|SaplingBlock|CropBlock|TrapDoorBlock|DoorBlock|FenceBlock|WallBlock|StairBlock|SlabBlock|PressurePlateBlock|ButtonBlock|LeverBlock|TorchBlock|RedStoneWireBlock|ChestBlock|FurnaceBlock|LiquidBlock|GrassBlock|RotatedPillarBlock|HorizontalDirectionalBlock|DirectionalBlock'
+                sound_artifact    = _is_sound_artifact(code, path, cls_for_graph)
 
                 item_content_signals = [
                     bool(re.search(r'\bextends\s+(?:' + _ITEM_BASES + r')\b', code)),
@@ -11993,6 +12267,11 @@ def run_pipeline(source_root: str = "."):
                     bool(re.search(r'\b(?:' + _BLOCK_BASES.replace('|', r'\b|\b') + r')\b', superchain_str)),
                 ]
                 is_block = sum(block_content_signals) >= 2 or (fname_block_hint and sum(block_content_signals) >= 1)
+                if sound_artifact:
+                    is_block = False
+                if path in registry_block_files:
+
+                    is_block = False
                 entity_candidate = (
                     is_likely_entity(code, path)
                     and not _should_skip_entity_artifact(code, path, cls_for_graph)
@@ -12203,6 +12482,43 @@ def _extract_block(text: str, start_index: int) -> str:
             if depth == 0:
                 return text[brace + 1:i]
     return text[brace + 1:]
+
+def _extract_paren_block(text: str, open_index: int) -> str:
+    """Given the index of an opening '(' in text, return the substring between
+    it and its matching ')', honouring nested parens and skipping parens that
+    appear inside string/char literals. Returns '' if open_index doesn't point
+    at '(' or no match is found (in which case the rest of the string is returned)."""
+    if open_index < 0 or open_index >= len(text) or text[open_index] != '(':
+        return ''
+    depth = 0
+    in_string = False
+    in_char = False
+    escape = False
+    i = open_index
+    while i < len(text):
+        ch = text[i]
+        if escape:
+            escape = False
+        elif ch == '\\' and (in_string or in_char):
+            escape = True
+        elif in_string:
+            if ch == '"':
+                in_string = False
+        elif in_char:
+            if ch == "'":
+                in_char = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "'":
+            in_char = True
+        elif ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                return text[open_index + 1:i]
+        i += 1
+    return text[open_index + 1:]
 
 def _read_text_file(path: str) -> str:
     try:
@@ -12714,6 +13030,7 @@ def _extract_method_body(source: str, method_name) -> Optional[str]:
     """Extract body of a named method. method_name may be a str or list of str (tries each)."""
     if not source or not method_name:
         return None
+
     if isinstance(method_name, list):
         for name in method_name:
             result = _extract_method_body(source, name)
