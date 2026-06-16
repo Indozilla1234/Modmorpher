@@ -70,6 +70,7 @@ ModMorpher does NOT:
 - guarantee functional gameplay logic conversion
 - support all Forge/Fabric mod features
 - handle complex rendering systems perfectly
+- handle mixins very well at all
 
 
 
