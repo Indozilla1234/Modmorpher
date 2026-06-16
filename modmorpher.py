@@ -16,18 +16,12 @@ from typing import Optional, Tuple, Dict, Set, List, Union
 DEBUG_MODE = 1
 
 _REAL_PRINT = builtins.print
-def _silent_print(*args, **kwargs):
-    return None
-
 if not DEBUG_MODE:
-    builtins.print = _silent_print
+    builtins.print = lambda *a, **kw: None
 
 class _SilentStream:
-    def write(self, text):
-        return len(text)
-
-    def flush(self):
-        return None
+    def write(self, s): return len(s)
+    def flush(self): return None
 
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
@@ -55,7 +49,6 @@ class _ProgressBar:
         filled = max(0, min(self._BAR_W, filled))
         empty  = self._BAR_W - filled
 
-   
         bar_filled = self._CYAN + "━" * filled + self._RESET
         bar_empty  = self._DIM  + "╌" * empty  + self._RESET
 
@@ -84,15 +77,6 @@ class _ProgressLogger:
         self._original_print = _REAL_PRINT
         self._active_bar = None
         self._intercepting = False
-
-    def write(self, *args, **kwargs):
-        return None
-
-    def warn(self, text: str):
-        return None
-
-    def error(self, text: str):
-        return None
 
     class _Phase:
         def __init__(self, logger, desc, total, unit, colour):
@@ -266,7 +250,6 @@ def generate_tick_handler_js(namespace: str, entity_id: str, tick_logic: str) ->
     ]
     return lines
 class MoLangBridge:
-
     _FUNC_MAP = [
         (r'Math\.sin\(', 'math.sin('),
         (r'Math\.cos\(', 'math.cos('),
@@ -282,7 +265,7 @@ class MoLangBridge:
         (r'Math\.min\(', 'math.min('),
         (r'Math\.max\(', 'math.max('),
         (r'Math\.clamp\(', 'math.clamp('),
-        (r'Math\.pow\(([^,]+),\s*2\)', r'(\1 * \1)'),                        
+        (r'Math\.pow\(([^,]+),\s*2\)', r'(\1 * \1)'),
         (r'Math\.pow\(([^,]+),\s*([^)]+)\)', r'math.pow(\1, \2)'),
         (r'Math\.PI', '3.14159265'),
         (r'Math\.toRadians\(([^)]+)\)', r'(\1 * 0.01745329)'),
@@ -379,13 +362,12 @@ class MoLangBridge:
             json.dump(data, fh, indent=2)
 
 class AnimationControllerGenerator:
-
     @staticmethod
     def generate_default_controller(entity_name: str, animations: Dict[str, str]) -> dict:
         controller_name = f"controller.animation.{entity_name}.default"
         states = {
             "default": {
-                "animations": list(animations.keys())[:1],                        
+                "animations": list(animations.keys())[:1],
             }
         }
 
@@ -405,7 +387,6 @@ class AnimationControllerGenerator:
         }
 
 class NBTTranslator:
-
     NBT_TO_BEDROCK_MAP = {
         'readAdditionalSaveData': 'getDynamicProperty',
         'addAdditionalSaveData':  'setDynamicProperty',
@@ -461,7 +442,6 @@ class NBTTranslator:
         return None
 
 class RecursiveNBTSerializer:
-
     _MAX_VALUE_LEN = 32_000
 
     @staticmethod
@@ -584,7 +564,6 @@ class RecursiveNBTSerializer:
             fh.write('\n'.join(lines))
 
 class CapabilityRegistry:
-
     CAPABILITY_TYPES = {
         'IEnergyStorage': {
             'properties': ['energy_stored', 'max_energy'],
@@ -650,7 +629,6 @@ class CapabilityRegistry:
         return lines
 
 class EventRouter:
-
     FORGE_TO_BEDROCK: Dict[str, tuple] = {
 
         'LivingHurtEvent':                      ('entityHurt',                 'entity',  False),
@@ -773,7 +751,6 @@ class EventRouter:
         return all_lines
 
 class MathTranspiler:
-
     @staticmethod
     def transpile_vector_op(java_expr: str) -> str:
 
@@ -789,7 +766,7 @@ class MathTranspiler:
         bedrock = re.sub(r'\.getY\(\)', '.y', bedrock)
         bedrock = re.sub(r'\.getZ\(\)', '.z', bedrock)
 
-        bedrock = re.sub(r'new AxisAlignedBB\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)', 
+        bedrock = re.sub(r'new AxisAlignedBB\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)',
                          r'new BlockVolume({ min: { x: \1, y: \2, z: \3 }, max: { x: \4, y: \5, z: \6 } })', bedrock)
         return bedrock
 
@@ -804,7 +781,6 @@ class MathTranspiler:
         return bedrock
 
 class JavaToBedrockMethodMap:
-
     STRICT_MAPPING = {
 
         'world.setBlockState': 'dimension.getBlock({0}).setPermutation({1})',
@@ -859,7 +835,6 @@ class JavaToBedrockMethodMap:
         return template
 
 class TickRegistry:
-
     def __init__(self):
         self.tick_handlers: Dict[str, list] = {}
         self.tick_priority: Dict[str, int] = {}
@@ -911,7 +886,6 @@ class TickRegistry:
         return lines
 
 class ComponentUIBridge:
-
     @staticmethod
     def detect_container_class(java_code: str) -> Optional[Dict[str, str]]:
         if 'class ' not in java_code or 'Container' not in java_code:
@@ -978,7 +952,6 @@ class ComponentUIBridge:
         return lines
 
 class JavaGUIConverter:
-
     _GUI_BASES = {
         'Screen', 'AbstractContainerScreen', 'GuiScreen',
         'AbstractGui', 'ContainerScreen', 'ChestScreen',
@@ -1180,7 +1153,6 @@ class JavaGUIConverter:
             fh.write('\n'.join(js_lines))
 
 class DependencyRegistry:
-
     def __init__(self):
         self.scripts: Dict[str, Dict] = {}
         self.nbt_properties: Dict[str, Set[str]] = {}
@@ -1205,7 +1177,6 @@ class DependencyRegistry:
         self.tick_entities.add(entity_id)
 
 class GlobalCapabilityRegistry:
-
     @staticmethod
     def generate_registry_js(namespace: str) -> list:
         return [
@@ -1484,14 +1455,6 @@ def sanitize_identifier(name: Optional[str]) -> str:
     s = s.strip('._')
     return s
 def clean_java_artifact_name(name: Optional[str]) -> str:
-    """Return a Bedrock-friendly base name with common Java suffixes removed.
-
-    This trims noisy suffixes frequently produced by Java/MCreator class names,
-    such as:
-      * MobEffect
-      * ModVariables
-      * Entity / Block / Item / Model / Renderer / Factory
-    """
     if not name:
         return ""
 
@@ -1565,7 +1528,6 @@ def sanitize_filename_keep_ext(filename: str) -> str:
         base_s = base_s.replace('__', '_')
     base_s = base_s.strip('._')
     ext_s = ext.lower()
-    return base_s + ext_s
     return base_s + ext_s
 def build_geometry_id(namespace: Optional[str], name: str) -> str:
     n = sanitize_identifier(name)
@@ -1685,8 +1647,8 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                         first = after[0].lower()
                         category = _normalize_texture_subfolder(first)
                         first_is_category = (
-                            category != first         
-                            or first in (         
+                            category != first
+                            or first in (
                                 "entity", "entities", "mob", "mobs",
                                 "item", "items", "block", "blocks",
                                 "mob_effect", "particle", "environment",
@@ -1694,7 +1656,7 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                                 "painting", "armor", "font", "effect",
                                 "screens", "screen",
                             )
-                        ) and "." not in first 
+                        ) and "." not in first
                         if first_is_category and len(after) > 1:
                             dest_dir = os.path.join(resource_pack, "textures", category, *[sanitize_identifier(p) for p in after[1:-1]])
                             os.makedirs(dest_dir, exist_ok=True)
@@ -1707,7 +1669,7 @@ def copy_assets_from_jar(jar_path: str, resource_pack: str):
                             dest_name = sanitize_filename_keep_ext(after[0])
                             dest = os.path.join(dest_dir, dest_name)
                         else:
-                           
+
                             dest_dir = os.path.join(resource_pack, "textures")
                             os.makedirs(dest_dir, exist_ok=True)
                             dest_name = sanitize_filename_keep_ext(after[-1])
@@ -1913,11 +1875,6 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
         except (ValueError, TypeError):
             tex_width, tex_height = 16, 16
         def extract_face_uvs(element: dict) -> dict:
-            # Build an explicit per-face UV mapping so the texture is applied
-            # to every face of the cube individually, instead of relying on
-            # Bedrock's "box UV" auto-unwrap (a single [u, v] origin), which
-            # stretches/cuts up the texture across the whole cube net unless
-            # the source image happens to be sized like a Java unwrap atlas.
             faces = element.get("faces", {})
             result = {}
             for face_name in ["north", "south", "east", "west", "up", "down"]:
@@ -1927,10 +1884,6 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
                     u, v = float(uv[0]), float(uv[1])
                     w, h = float(uv[2]) - u, float(uv[3]) - v
                 else:
-                    # No UV specified for this face (or the face is missing
-                    # entirely) - default to the full texture so the face
-                    # still gets the texture rather than being left blank
-                    # or inheriting another face's stretched mapping.
                     u, v, w, h = 0.0, 0.0, float(tex_width), float(tex_height)
                 result[face_name] = {"uv": [u, v], "uv_size": [w, h]}
             return result
@@ -2278,7 +2231,7 @@ def convert_layerdefinition_to_geckolib(
                 visited.add(current)
                 path.append(current)
                 current = var_to_parent_var[current]
-                if len(path) > 100:                
+                if len(path) > 100:
                     break
             if current == root_var:
 
@@ -2724,8 +2677,8 @@ def scan_and_convert_layerdefinition_models(
         'AdvancedEntityModel', 'ExtendedEntityModel', 'CitadelEntityModel',
         'BipedModel', 'QuadrupedModel', 'AgeableModel',
         'GeoModel', 'GeoLayerRenderer',
-        'TileEntitySpecialRenderer', 'BlockEntityRenderer',                           
-        'Block'                               
+        'TileEntitySpecialRenderer', 'BlockEntityRenderer',
+        'Block'
     ]
     CTOR_SIGNALS = ('setRotationPoint', 'addBox', 'addChild', 'setTextureOffset',
                     'texOffset', 'rotateAngleX', 'rotateAngleY', 'rotateAngleZ',
@@ -2896,7 +2849,7 @@ def normalise_all_geometry_to_geckolib(resource_pack: str, namespace: str) -> in
     if written:
         pass
 
-  
+
     for dirpath, _, filenames in os.walk(os.path.join(resource_pack, "models")):
         for fname in filenames:
             lower = fname.lower()
@@ -3483,7 +3436,6 @@ def _rewrite_java_identifiers(source: str, rename_map: Dict[str, str]) -> str:
     return source
 
 
-
 import urllib.request
 import urllib.error
 
@@ -3600,8 +3552,6 @@ def detect_minecraft_version(jar_path: Optional[str] = None) -> Optional[str]:
     return None
 
 
-
-
 _MOJANG_VERSION_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 _MAPPING_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mapping_cache")
 
@@ -3621,7 +3571,7 @@ def _cached_path(mc_version: str) -> str:
 
 
 def download_mojang_mappings(mc_version: str) -> Optional[str]:
- 
+
     cache_file = _cached_path(mc_version)
     if os.path.isfile(cache_file):
         try:
@@ -3629,7 +3579,7 @@ def download_mojang_mappings(mc_version: str) -> Optional[str]:
         except Exception:
             pass
 
-   
+
     manifest_data = _fetch_url(_MOJANG_VERSION_MANIFEST)
     if not manifest_data:
         return None
@@ -3644,7 +3594,7 @@ def download_mojang_mappings(mc_version: str) -> Optional[str]:
             version_url = entry.get('url')
             break
     if not version_url:
-   
+
         for entry in manifest.get('versions', []):
             if entry.get('id', '').startswith(mc_version):
                 version_url = entry.get('url')
@@ -3668,7 +3618,7 @@ def download_mojang_mappings(mc_version: str) -> Optional[str]:
         .get('url')
     )
     if not mappings_url:
-   
+
         return None
 
     mapping_data = _fetch_url(mappings_url)
@@ -3684,10 +3634,8 @@ def download_mojang_mappings(mc_version: str) -> Optional[str]:
     return mapping_text
 
 
-
-
 def parse_mojang_mappings(mapping_text: str) -> Tuple[Dict[str, str], Dict[str, str]]:
-   
+
     field_map: Dict[str, str] = {}
     method_map: Dict[str, str] = {}
 
@@ -3705,7 +3653,7 @@ def parse_mojang_mappings(mapping_text: str) -> Tuple[Dict[str, str], Dict[str, 
         readable_side, obf_name = stripped.rsplit(' -> ', 1)
         obf_name = obf_name.strip()
 
-     
+
         readable_side = re.sub(r'^\d+:\d+:', '', readable_side).strip()
 
         parts = readable_side.split()
@@ -3723,7 +3671,7 @@ def parse_mojang_mappings(mapping_text: str) -> Tuple[Dict[str, str], Dict[str, 
             continue
 
         if '(' in readable_name_full:
-          
+
             if len(obf_name) <= 3 or re.fullmatch(r'[a-z]{1,3}\d*', obf_name):
                 method_map[obf_name] = readable_name
         else:
@@ -3731,7 +3679,6 @@ def parse_mojang_mappings(mapping_text: str) -> Tuple[Dict[str, str], Dict[str, 
                 field_map[obf_name] = readable_name
 
     return field_map, method_map
-
 
 
 _SRG_BUILTIN_REMAP: Dict[str, str] = {
@@ -3841,7 +3788,7 @@ def apply_mojang_mappings_to_source(
 
     combined = {}
     combined.update(field_map)
-    combined.update(method_map)  
+    combined.update(method_map)
 
     if not combined:
         return source
@@ -3857,14 +3804,13 @@ def apply_mojang_mappings_to_source(
     return pat.sub(_replace, source)
 
 
-
 _DETECTED_MC_VERSION: Optional[str] = None
 
 
 def _get_or_fetch_mojang_maps(
     jar_path: Optional[str] = None,
 ) -> Tuple[Dict[str, str], Dict[str, str]]:
-  
+
     global _DETECTED_MC_VERSION
 
     mc_version = _DETECTED_MC_VERSION or detect_minecraft_version(jar_path)
@@ -3916,7 +3862,7 @@ def deobfuscate_java_sources(java_files: Dict[str, str], namespace: str = "") ->
                 for path, code in java_files.items()
             }
     except Exception:
-        pass 
+        pass
 
     class_name_map: Dict[str, str] = {}
     path_to_class: Dict[str, str] = {}
@@ -4390,12 +4336,6 @@ def extract_attributes_from_java(java_code: str) -> dict:
     return results
 
 def _normalize_entity_attributes(results: Dict[str, float], block: str = "") -> Dict[str, float]:
-    """Normalize attribute guesses after extraction.
-
-    This corrects common obfuscation/mapping failures where health and armor
-    get swapped or health is left at a placeholder zero while armor carries the
-    real value.
-    """
     if not results:
         return results
 
@@ -4404,7 +4344,7 @@ def _normalize_entity_attributes(results: Dict[str, float], block: str = "") -> 
     health = out.get("health")
     armor = out.get("armor")
 
- 
+
     if health is not None and armor is not None:
         if (health <= 0 or health < 1) and armor >= 20:
             out["health"] = armor
@@ -5314,11 +5254,6 @@ SOUND_ARTIFACT_KEYWORDS = [
 ]
 
 def _is_sound_artifact(java_code: str, filename: str = '', cls_name: Optional[str] = None) -> bool:
-    """Best-effort filter for sound registries / audio-only classes.
-
-    This keeps sound source files out of the block/item/entity scanners even when
-    their names are a little generic (for example, `scream_1`).
-    """
     haystack = ' '.join([
         str(cls_name or ''),
         os.path.basename(filename) or '',
@@ -6976,7 +6911,7 @@ def apply_entity_sounds(bedrock_entity: dict, sounds: dict, namespace: str,
             "pitch": [0.8, 1.2],
             "volume": 1.0
         }
-       
+
         _ANIM_ONLY_SLOTS = {"attack"}
         anim_sounds = {k: v for k, v in events_block.items() if k in _ANIM_ONLY_SLOTS}
         _update_rp_entity_sound_effects(entity_id, anim_sounds)
@@ -7701,7 +7636,6 @@ def run_class_decompiler(jar_file, output_dir):
         return None
 
 def _is_java_texture_pack(zip_path: str) -> bool:
-    """Return True if the zip looks like a Java Edition resource/texture pack."""
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             names = zf.namelist()
@@ -7994,11 +7928,6 @@ _JAVA_ITEM_RENAME_MAP: Dict[str, str] = {
 
 
 def _resize_texture_for_bedrock(src_path: str, dst_path: str) -> bool:
-    """
-    Copy a texture to dst_path.  If Pillow is available and the texture is
-    animated (height > width, i.e. an atlas strip), crop to the first frame
-    so Bedrock does not misread it.  Returns True on success.
-    """
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     if not PIL_AVAILABLE:
         shutil.copy2(src_path, dst_path)
@@ -8021,12 +7950,6 @@ def _resize_texture_for_bedrock(src_path: str, dst_path: str) -> bool:
 
 
 def convert_java_texture_pack(zip_path: str) -> str:
-    """
-    Convert a Java Edition texture / resource pack ZIP into a Bedrock Edition
-    resource pack folder (and .mcpack zip).
-
-    Returns the path to the output .mcpack file, or an empty string on failure.
-    """
     _orig = _logger._original_print
     _orig(f"\n  [TexturePack] Converting Java texture pack: {zip_path}")
 
@@ -8097,7 +8020,7 @@ def convert_java_texture_pack(zip_path: str) -> str:
                 zip_root_prefix = candidate_norm[: idx + 1]
                 break
             if candidate_norm == "pack.mcmeta":
-                break  
+                break
         if zip_root_prefix:
             _REAL_PRINT(f"  [TexturePack] Detected zip subfolder prefix: {zip_root_prefix!r}")
             names = [n.replace("\\", "/")[len(zip_root_prefix):] if n.replace("\\", "/").startswith(zip_root_prefix) else n.replace("\\", "/") for n in raw_names]
@@ -8449,16 +8372,6 @@ JAVA_BLOCK_MATERIAL_MAP = {
     "FIRE": "decoration", "DECORATION": "decoration",
 }
 def _build_block_definition(block_id: str, safe_name: str, namespace: str, java_code: str, block_class_name: str = "") -> dict:
-    """Build a Bedrock block behaviour-pack JSON document from Java source/property text.
-
-    `java_code` may be the full source of a class extending Block (class-based
-    conversion), or just the relevant registration/properties snippet plus any
-    anonymous-class body (registry-based conversion). `block_class_name` is the
-    Java class actually being instantiated (e.g. "RotatedPillarBlock", "StairBlock",
-    "Block", or a custom subclass name) and is folded into the text searched for
-    state/geometry hints so registry-based entries get the same heuristics as
-    class-based ones.
-    """
     search_text = java_code
     if block_class_name:
         search_text = block_class_name + "\n" + java_code
@@ -8555,9 +8468,9 @@ def convert_java_block_full(java_code: str, java_path: str, namespace: str):
 
 _BLOCK_REGISTRY_VAR_RE = re.compile(
     r'DeferredRegister\s*(?:'
-        r'<\s*(?:[\w.]*\.)?Block\s*>'  
+        r'<\s*(?:[\w.]*\.)?Block\s*>'
         r'|'
-        r'\.Blocks\b'      
+        r'\.Blocks\b'
     r')\s+(\w+)\s*=\s*DeferredRegister\.create(?:Blocks)?\s*\('
 )
 
@@ -8576,15 +8489,6 @@ def _block_class_extends_block(class_name: str, cls_to_code: Dict[str, str]) -> 
     return False
 
 def scan_block_registrations(java_files: Dict[str, str], namespace: str, stats: Optional[dict] = None) -> Tuple[set, set]:
-    """Scan registry classes for `BLOCKS.register(...)`-style block declarations
-    that the class-based scanner can't see, and emit a block JSON for each.
-
-    Returns (handled_block_names, handled_files):
-      - handled_block_names: set of `safe_name`s that were written out here
-      - handled_files: set of source file paths that should be skipped by the
-        class-based block scanner (the registry file itself, plus any custom
-        block subclass file whose properties were folded into a registration)
-    """
     handled_block_names: set = set()
     handled_files: set = set()
 
@@ -8601,9 +8505,9 @@ def scan_block_registrations(java_files: Dict[str, str], namespace: str, stats: 
             continue
 
         code = _strip_java_comments(raw_code)
-        registrations = [] 
+        registrations = []
 
-  
+
         reg_vars = set(m.group(1) for m in _BLOCK_REGISTRY_VAR_RE.finditer(code))
         for var in reg_vars:
             for m in re.finditer(rf'\b{re.escape(var)}\s*\.\s*(\w+)\s*\(', code):
@@ -9404,7 +9308,7 @@ _PACKET_HANDLER_PATTERNS = [
 
 def scan_networking(java_files: Dict[str, str], namespace: str) -> None:
     channel_files: dict = {}
-    packet_classes: dict = {}                    
+    packet_classes: dict = {}
 
     for path, code in java_files.items():
         for pat in _PACKET_HANDLER_PATTERNS:
@@ -9580,7 +9484,7 @@ def scan_client_classes(java_files: Dict[str, str]) -> None:
 def write_porting_notes() -> None:
     if not _PORTING_NOTES:
         return
-   
+
     out_path = "PORTING_NOTES.txt"
     categories = {"mixin": [], "capability": [], "network": [], "client-only": [], "other": []}
     for note in _PORTING_NOTES:
@@ -10174,13 +10078,13 @@ def extract_and_generate_particles(java_code: str, entity_id: str, namespace: st
     safe_name = sanitize_identifier(entity_id.split(":")[-1])
     found = set()
 
-    particle_refs = re.findall(r'\b(\w+)\s*\.\s*spawn\s*\(', java_code)                         
+    particle_refs = re.findall(r'\b(\w+)\s*\.\s*spawn\s*\(', java_code)
     for ref in particle_refs:
         if ref in JAVA_PARTICLE_MAP:
             found.add((ref, JAVA_PARTICLE_MAP[ref]))
         else:
 
-            found.add((ref, "minecraft:enchantment_table_particle"))                     
+            found.add((ref, "minecraft:enchantment_table_particle"))
     if not found:
         return
     out_dir = os.path.join(RP_FOLDER, "particles")
@@ -10400,7 +10304,7 @@ def generate_animation_controller(entity_id: str, animations: set, namespace: st
     spawn_anim  = pick("spawn")
     if not idle_anim:
         idle_anim = sorted(animations)[0]
-  
+
     states = {}
     if has_spawn:
         states["spawn"] = {
@@ -10569,14 +10473,6 @@ def patch_rp_entity_with_controller(entity_basename: str, animations: set,
     except Exception as e:
         _warn(f"[anim_wire] Failed to patch {rp_path}: {e}")
 def prune_orphaned_assets() -> List[str]:
-    """Walk the generated BP/RP and remove files that have no live references.
-
-    Pass 1 — build reference sets from every JSON file that can cite assets.
-    Pass 2 — delete unreferenced textures, geometry, and entity/block files
-             that are missing their required assets.
-
-    Returns a list of human-readable log lines describing what was removed.
-    """
     removed: List[str] = []
     try:
         _prune_orphaned_assets_impl(removed)
@@ -10587,9 +10483,8 @@ def prune_orphaned_assets() -> List[str]:
     return removed
 
 def _prune_orphaned_assets_impl(removed: List[str]) -> None:
-    """Implementation detail — called by prune_orphaned_assets."""
 
-  
+
     def _all_strings(obj) -> List[str]:
         if isinstance(obj, str):
             return [obj]
@@ -10613,7 +10508,6 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
             return None
 
     def _rel(path: str) -> str:
-        """Relative path from OUTPUT_DIR for logging."""
         try:
             return os.path.relpath(path, OUTPUT_DIR).replace("\\", "/")
         except ValueError:
@@ -10625,8 +10519,6 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
             removed.append(f"[prune] {reason}: {_rel(path)}")
         except OSError:
             pass
-
-   
 
     referenced_textures: set = set()
     referenced_geo_ids: set = set()
@@ -10822,7 +10714,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                                 f"Orphaned texture in textures/{entry}/ (not referenced by any surviving JSON)",
                             )
 
- 
+
     bp_blocks_dir = os.path.join(BP_FOLDER, "blocks")
     rp_blocks_dir = os.path.join(RP_FOLDER, "blocks")
     terrain_path  = os.path.join(RP_FOLDER, "textures", "terrain_texture.json")
@@ -10860,7 +10752,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                     f"[warn] {_rel(fpath)}: BP block JSON has no terrain_texture entry or RP block definition"
                 )
 
- 
+
     for folder in [RP_FOLDER, BP_FOLDER]:
         for root, dirs, files in os.walk(folder, topdown=False):
             if root == folder:
@@ -10870,7 +10762,7 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                     os.rmdir(root)
                 except OSError:
                     pass
- 
+
 
 def run_validation_pass() -> list:
     warnings = []
@@ -12512,10 +12404,6 @@ def _extract_block(text: str, start_index: int) -> str:
     return text[brace + 1:]
 
 def _extract_paren_block(text: str, open_index: int) -> str:
-    """Given the index of an opening '(' in text, return the substring between
-    it and its matching ')', honouring nested parens and skipping parens that
-    appear inside string/char literals. Returns '' if open_index doesn't point
-    at '(' or no match is found (in which case the rest of the string is returned)."""
     if open_index < 0 or open_index >= len(text) or text[open_index] != '(':
         return ''
     depth = 0
@@ -12977,7 +12865,6 @@ class JavaSymbolTable:
         self._scan_regex(java_code)
 
 
-
 def translate_method_invocation(invocation: object, player: str, namespace: str, symbol_table: JavaSymbolTable) -> Optional[str]:
     member = getattr(invocation, 'member', '')
     qualifier = getattr(invocation, 'qualifier', None)
@@ -13055,7 +12942,6 @@ def translate_statement(stmt: object, player: str, namespace: str, symbol_table:
     return out
 
 def _extract_method_body(source: str, method_name) -> Optional[str]:
-    """Extract body of a named method. method_name may be a str or list of str (tries each)."""
     if not source or not method_name:
         return None
 
@@ -13129,9 +13015,6 @@ def _detect_project_loader() -> str:
                 if '@SubscribeEvent' in code:
                     loaders['forge'] += 1
     return max(loaders, key=loaders.get)
-
-
-    return None
 
 def _translate_mixin_body_to_js(body: str, namespace: str, safe_name: str) -> list[str]:
     if not body:
@@ -13386,18 +13269,9 @@ def _infer_target_event(
     at_name: str,
     raw: str,
 ) -> Optional[str]:
-    """Infer the Bedrock scripting API event string from mixin context.
-
-    Parameters mirror what _event_subscription_lines extracts:
-      target_cls  – the @Mixin target class name (e.g. 'ServerPlayer')
-      method_name – the Java method being injected into
-      body        – raw Java method body source
-      at_name     – the @At value string (e.g. 'HEAD', 'RETURN', 'INVOKE')
-      raw         – full raw annotation text for extra keyword scanning
-    """
     needle = f'{target_cls} {method_name} {body} {at_name} {raw}'.lower()
 
-   
+
     if any(k in needle for k in (
         'tick', 'update', 'inventorytick', 'servertick', 'clienttick', 'aiset', 'dotick',
     )):
@@ -13411,7 +13285,7 @@ def _infer_target_event(
     if any(k in needle for k in ('hurt', 'damage', 'attack', 'hurtentity', 'actuallyhurt')):
         return 'world.afterEvents.entityHurt'
 
- 
+
     if any(k in needle for k in ('death', 'die', 'killed', 'ondeath')):
         return 'world.afterEvents.entityDie'
 
@@ -13430,7 +13304,7 @@ def _infer_target_event(
     if any(k in needle for k in ('place', 'useon', 'blockactivated', 'interactblock', 'rightclickblock', 'blockplace')):
         return 'world.afterEvents.playerPlaceBlock'
 
-  
+
     if any(k in needle for k in ('itemuse', 'useitem', 'finishusingitem', 'appendtooltip', 'usetick')):
         return 'world.afterEvents.itemUse'
 
@@ -13438,13 +13312,13 @@ def _infer_target_event(
     if any(k in needle for k in ('interact', 'rightclick', 'interactat', 'mount', 'attackentity')):
         return 'world.afterEvents.playerInteractWithEntity'
 
- 
+
     if any(k in needle for k in ('pickup', 'pickupitem', 'itempickup')):
         return 'world.afterEvents.playerPickUpItem'
     if any(k in needle for k in ('drop', 'toss', 'throw', 'dropitem')):
         return 'world.afterEvents.playerDropItem'
 
- 
+
     if any(k in needle for k in ('craft', 'crafted', 'craftitem')):
         return 'world.afterEvents.itemCompleteUse'
 
@@ -13455,12 +13329,6 @@ def _infer_target_event(
     return None
 
 def _param_binding_expr(java_type: str) -> str:
-    """Return a JS expression that extracts the right value from a Bedrock event
-    for a given Java parameter type.
-
-    Used inside _event_subscription_lines to auto-bind event properties to the
-    parameter names expected by the translated mixin wrapper function.
-    """
     base = java_type.strip()
 
     base = re.sub(r'<[^>]*>', '', base).replace('[]', '').strip()
@@ -13504,11 +13372,6 @@ def _param_binding_expr(java_type: str) -> str:
     return 'event'
 
 def _translate_java_body_to_js(body: str, namespace: str, safe_name: str) -> List[str]:
-    """Translate a raw Java method body string to a list of JavaScript lines.
-
-    Delegates to the AST-based translator when javalang is available; falls
-    back to line-by-line comment passthrough so the output is always valid JS.
-    """
     if not body:
         return []
 
