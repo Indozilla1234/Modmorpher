@@ -7665,6 +7665,11 @@ def run_class_decompiler(jar_file, output_dir):
         _warn(f"Error: ClassDecompiler.jar not found at {lib_jar}")
         return None
 
+    if shutil.which("java") is None:
+        _warn("Error: no 'java' executable found on PATH — a JDK/JRE is required to run the decompiler. "
+              "Install one (e.g. `sudo apt install default-jre`) and re-run.")
+        return None
+
     try:
         with zipfile.ZipFile(lib_jar, 'r') as z:
             internal_path = next(
@@ -7686,19 +7691,38 @@ def run_class_decompiler(jar_file, output_dir):
         else:
             _warn("No remapper/mappings found; decompiling original jar and relying on source-level heuristics.")
 
-        subprocess.run(
+        proc = subprocess.run(
             ["java", "-jar", os.path.abspath(lib_jar),
              os.path.abspath(working_jar), os.path.abspath(output_dir)],
             cwd=script_dir,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        if proc.returncode != 0:
+            _warn(f"Decompiler exited with code {proc.returncode}")
+            if proc.stderr:
+                _warn(f"  stderr: {proc.stderr.strip()[-2000:]}")
+            if proc.stdout:
+                _warn(f"  stdout: {proc.stdout.strip()[-2000:]}")
+            return None
+
+        java_count = 0
+        if os.path.isdir(output_dir):
+            for _root, _dirs, _files in os.walk(output_dir):
+                java_count += sum(1 for f in _files if f.endswith(".java"))
+        if java_count == 0:
+            _warn(f"Decompiler ran but produced no .java files in {output_dir}. "
+                  f"stdout/stderr above (if any) may explain why.")
+            return None
+
         return extracted_engine
 
     except Exception as e:
         _warn(f"Decompilation failure: {e}")
         return None
+
 
 def _is_java_texture_pack(zip_path: str) -> bool:
     """Return True if the zip looks like a Java Edition resource/texture pack."""
@@ -8401,10 +8425,16 @@ def main():
     if extracted_engine:
         if os.path.exists(extracted_engine):
             os.remove(extracted_engine)
+        source_root = modmorpher_input_folder
     else:
-        _warn("Decompiler did not complete cleanly; attempting pipeline on any available sources.")
+        _REAL_PRINT(
+            "  [ModMorpher] ERROR: decompilation failed — see warnings above for the cause "
+            "(missing Java runtime, missing tools/ClassDecompiler.jar, or a decompiler crash). "
+            "Refusing to fall back to scanning the current directory, since that would silently "
+            "process the wrong files. Fix the issue above and re-run."
+        )
+        return
 
-    source_root = modmorpher_input_folder if os.path.isdir(modmorpher_input_folder) else "."
     run_pipeline(source_root)
 def find_best_texture_match(safe_name: str, subfolder: str) -> str:
     tex_dir = os.path.join(RP_FOLDER, "textures", subfolder)
@@ -10657,11 +10687,12 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                     all_json_strings.add(s)
                     if s.startswith("textures/") or "/" in s:
                         referenced_textures.add(s)
-                        referenced_textures.add(s.lstrip("textures/"))
+                        if s.startswith("textures/"):
+                            referenced_textures.add(s[len("textures/"):])
                         referenced_textures.add(os.path.splitext(s)[0])
-                    if s.startswith("geometry."):
-                        referenced_geo_ids.add(s)
-                        tail = s[len("geometry."):]
+                    if s.lower().startswith("geometry."):
+                        referenced_geo_ids.add(s.lower())
+                        tail = s[len("geometry."):].lower()
                         referenced_geo_stems.add(tail)
                         referenced_geo_stems.add(tail.split(".")[-1])
 
@@ -10682,11 +10713,12 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
                     continue
                 ident = (geo_list.get("description") or {}).get("identifier", "")
                 if ident:
-                    geo_id_to_file[ident] = fpath
-                    tail = ident[len("geometry."):] if ident.startswith("geometry.") else ident
+                    ident_l = ident.lower()
+                    geo_id_to_file[ident_l] = fpath
+                    tail = ident_l[len("geometry."):] if ident_l.startswith("geometry.") else ident_l
                     geo_stem_to_file[tail] = fpath
                     geo_stem_to_file[tail.split(".")[-1]] = fpath
-            stem = os.path.splitext(fname)[0]
+            stem = os.path.splitext(fname)[0].lower()
             geo_stem_to_file.setdefault(stem, fpath)
 
 
@@ -10757,8 +10789,8 @@ def _prune_orphaned_assets_impl(removed: List[str]) -> None:
             if not fname.endswith(".json"):
                 continue
             fpath = os.path.join(geo_root, fname)
-            stem = os.path.splitext(fname)[0]
-            base = os.path.splitext(stem)[0]
+            stem = os.path.splitext(fname)[0].lower()
+            base = os.path.splitext(stem)[0].lower()
             matched = (
                 stem in referenced_geo_stems
                 or base in referenced_geo_stems
