@@ -32,7 +32,7 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.6.1.3 'Blocks, AGAIN, AGAIN!'"
+Tool_Version = "1.6.1.4 'Basic Bug Fix"
 DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
