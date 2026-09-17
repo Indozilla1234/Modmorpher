@@ -13,7 +13,8 @@ import re
 import copy
 from typing import Optional, Tuple, Dict, Set, List, Union
 
-DEBUG_MODE = 1
+Tool_Version = "1.6.1.5 'The Great Warning"
+DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 
 _REAL_PRINT = builtins.print
 def _silent_print(*args, **kwargs):
@@ -32,8 +33,6 @@ class _SilentStream:
 if not DEBUG_MODE:
     sys.stderr = _SilentStream()
 
-Tool_Version = "1.6.1.4 'Basic Bug Fix"
-DEBUG_MODE = os.environ.get('MODMORPHER_DEBUG', '0') == '1'
 PROGRESS_AVAILABLE = True
 
 class _ProgressBar:
@@ -66,7 +65,8 @@ class _ProgressBar:
         label = f"{label_colour}{self.message}{self._RESET}"
 
         suffix_part = f"  {self._DIM}{self.suffix}{self._RESET}" if self.suffix else ""
-        line = f"\r  {label:<40} {bar_filled}{bar_empty}  {percent:3d}%  {count}{suffix_part}"
+
+        line = f"\r\033[K  {label:<40} {bar_filled}{bar_empty}  {percent:3d}%  {count}{suffix_part}"
 
         sys.stdout.write(line + ("\n" if final else ""))
         sys.stdout.flush()
@@ -141,7 +141,22 @@ class _ProgressLogger:
         return self._Phase(self, desc, total, unit, colour)
 
 _logger = _ProgressLogger()
-_warn = lambda *a: None
+
+def _warn(message: str) -> None:
+    """Record a non-fatal warning for the user.
+
+    Previously this was a no-op (`_warn = lambda *a: None`), so every one of
+    the ~48 call sites across the conversion pipeline silently discarded its
+    message. Now it's recorded in PORTING_NOTES.txt via the existing
+    _PORTING_NOTES mechanism. Deliberately silent on the terminal — warnings
+    show up in the notes file, not the console.
+    """
+    text = str(message)
+    try:
+        _PORTING_NOTES.append(f"[warning] {text}")
+    except NameError:
+
+        pass
 
 def _safe_rp_write(desc, path, data):
     try:
@@ -1913,11 +1928,7 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
         except (ValueError, TypeError):
             tex_width, tex_height = 16, 16
         def extract_face_uvs(element: dict) -> dict:
-            # Build an explicit per-face UV mapping so the texture is applied
-            # to every face of the cube individually, instead of relying on
-            # Bedrock's "box UV" auto-unwrap (a single [u, v] origin), which
-            # stretches/cuts up the texture across the whole cube net unless
-            # the source image happens to be sized like a Java unwrap atlas.
+
             faces = element.get("faces", {})
             result = {}
             for face_name in ["north", "south", "east", "west", "up", "down"]:
@@ -1927,10 +1938,7 @@ def convert_vanilla_model_to_geckolib(classic: dict, model_name: str = "model") 
                     u, v = float(uv[0]), float(uv[1])
                     w, h = float(uv[2]) - u, float(uv[3]) - v
                 else:
-                    # No UV specified for this face (or the face is missing
-                    # entirely) - default to the full texture so the face
-                    # still gets the texture rather than being left blank
-                    # or inheriting another face's stretched mapping.
+
                     u, v, w, h = 0.0, 0.0, float(tex_width), float(tex_height)
                 result[face_name] = {"uv": [u, v], "uv_size": [w, h]}
             return result
@@ -4989,7 +4997,8 @@ def write_render_controller(entity_basename: str, namespace: str, geometry_ident
         }
     }
     out_path = os.path.join(RP_FOLDER, "render_controllers", f"{entity_basename_clean}.render_controllers.json")
-    _REAL_PRINT(f"[DEBUG] write_render_controller -> {out_path}")
+    if DEBUG_MODE:
+        _REAL_PRINT(f"[DEBUG] write_render_controller -> {out_path}")
     _safe_rp_write("render controller", out_path, controller)
     return controller_id
 def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str, geometry_identifier: str, animation_key: Optional[str], controller_id: str):
@@ -5029,7 +5038,8 @@ def write_rp_entity_json(entity_basename: str, namespace: str, texture_ref: str,
         "minecraft:client_entity": {"description": description}
     }
     out_path = os.path.join(RP_FOLDER, "entity", f"{entity_basename_clean}.entity.json")
-    _REAL_PRINT(f"[DEBUG] write_rp_entity_json -> {out_path}")
+    if DEBUG_MODE:
+        _REAL_PRINT(f"[DEBUG] write_rp_entity_json -> {out_path}")
     _safe_rp_write("RP entity", out_path, client_entity)
 
 def extract_block_properties_from_java(java_code: str):
@@ -5988,7 +5998,8 @@ def _emit_entity_procedure_script(entity_identifier: str, namespace: str,
     return out_path
 
 def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: dict, geom_file_map: dict, geom_ns_map: dict, anim_key_map: dict, stats: dict):
-    _REAL_PRINT(f"[DEBUG] convert_java_to_bedrock called for {java_path} as {entity_identifier}")
+    if DEBUG_MODE:
+        _REAL_PRINT(f"[DEBUG] convert_java_to_bedrock called for {java_path} as {entity_identifier}")
     try:
         with open(java_path, 'r', encoding='utf-8', errors='ignore') as f:
             java_code = f.read()
@@ -6609,7 +6620,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
     try:
         controller_id = write_render_controller(entity_basename.lower(), namespace.lower(), geom_identifier, uv_anim=None)
     except Exception as e:
-        _REAL_PRINT(f"[ERROR] write_render_controller failed: {e}")
+        _warn(f"write_render_controller failed for {entity_basename}: {e}")
         controller_id = f"controller.render.{namespace.lower()}.{entity_basename.lower()}"
     try:
         write_rp_entity_json(
@@ -6624,7 +6635,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
             os.path.join(RP_FOLDER, "entity", f"{entity_basename.lower()}.entity.json")
         )
     except Exception as e:
-        _REAL_PRINT(f"[ERROR] write_rp_entity_json failed: {e}")
+        _warn(f"write_rp_entity_json failed for {entity_basename}: {e}")
         fallback_rp = {
             "format_version": "1.10.0",
             "minecraft:client_entity": {
@@ -6642,7 +6653,7 @@ def convert_java_to_bedrock(java_path: str, entity_identifier: str, gecko_maps: 
     try:
         patch_rp_entity_with_controller(entity_basename.lower(), animations, anim_controller_id, namespace)
     except Exception as e:
-        _REAL_PRINT(f"[ERROR] patch_rp_entity_with_controller failed: {e}")
+        _warn(f"patch_rp_entity_with_controller failed for {entity_basename}: {e}")
     generate_spawn_rules(clean_identifier, java_code, namespace)
     extract_and_generate_particles(java_code, clean_identifier, namespace)
     if "TradeWithPlayerGoal" in ai_goals:
@@ -7740,7 +7751,7 @@ def _is_java_texture_pack(zip_path: str) -> bool:
             )
             return has_mcmeta or has_assets_textures or has_direct_textures
     except Exception as e:
-        _REAL_PRINT(f"  [TexturePack] Could not open {zip_path}: {e}")
+        _warn(f"Could not open texture pack {zip_path}: {e}")
         return False
 _JAVA_TO_BEDROCK_TEXTURE_PATHS: List[Tuple[str, str]] = [
     ("assets/minecraft/textures/block/",  "textures/blocks/"),
@@ -8103,13 +8114,14 @@ def convert_java_texture_pack(zip_path: str) -> str:
     block_texture_map: Dict[str, str] = {}
 
     _orig("  [TexturePack] Extracting & remapping textures …")
-    _REAL_PRINT(f"  [TexturePack] ZIP contents (first 30 entries):")
-    try:
-        with zipfile.ZipFile(zip_path, "r") as _diag_zf:
-            for _n in _diag_zf.namelist()[:30]:
-                _REAL_PRINT(f"    {_n!r}")
-    except Exception as _e:
-        _REAL_PRINT(f"    (could not list: {_e})")
+    if DEBUG_MODE:
+        _REAL_PRINT(f"  [TexturePack] ZIP contents (first 30 entries):")
+        try:
+            with zipfile.ZipFile(zip_path, "r") as _diag_zf:
+                for _n in _diag_zf.namelist()[:30]:
+                    _REAL_PRINT(f"    {_n!r}")
+        except Exception as _e:
+            _REAL_PRINT(f"    (could not list: {_e})")
 
     with zipfile.ZipFile(zip_path, "r") as zf:
         raw_names = zf.namelist()
@@ -8123,7 +8135,8 @@ def convert_java_texture_pack(zip_path: str) -> str:
             if candidate_norm == "pack.mcmeta":
                 break  
         if zip_root_prefix:
-            _REAL_PRINT(f"  [TexturePack] Detected zip subfolder prefix: {zip_root_prefix!r}")
+            if DEBUG_MODE:
+                _REAL_PRINT(f"  [TexturePack] Detected zip subfolder prefix: {zip_root_prefix!r}")
             names = [n.replace("\\", "/")[len(zip_root_prefix):] if n.replace("\\", "/").startswith(zip_root_prefix) else n.replace("\\", "/") for n in raw_names]
             _name_map = {}
             for orig in raw_names:
@@ -8290,12 +8303,10 @@ def convert_java_texture_pack(zip_path: str) -> str:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
         if skipped_samples:
-            _REAL_PRINT(
-                f"  [TexturePack] {stats['skipped']} texture(s) skipped (unrecognised path). "
-                f"First {len(skipped_samples)} examples:"
+            _warn(
+                f"{stats['skipped']} texture(s) skipped (unrecognised path) in {zip_path}. "
+                f"First {len(skipped_samples)} examples: " + ", ".join(skipped_samples)
             )
-            for s in skipped_samples:
-                _REAL_PRINT(f"    {s}")
     terrain_texture = {
         "resource_pack_name": pack_name,
         "texture_name": "atlas.terrain",
@@ -8386,8 +8397,7 @@ def main():
                 convert_java_texture_pack(tp_zip)
             except Exception as e:
                 import traceback
-                _REAL_PRINT(f"  [TexturePack] ERROR converting {tp_zip}: {e}")
-                _REAL_PRINT(traceback.format_exc())
+                _warn(f"Texture pack conversion failed for {tp_zip}: {e}\n{traceback.format_exc()}")
         has_jar = any(f.endswith(".jar") for f in os.listdir("."))
         if not has_jar:
             return
@@ -12410,13 +12420,13 @@ def run_pipeline(source_root: str = "."):
     with _logger.phase("Pruning orphaned assets", total=0, unit="step", colour="yellow"):
         prune_log = prune_orphaned_assets()
         for line in prune_log:
-            if line.startswith("[prune]"):
-                _logger._original_print(f"      {line}")
+            if line.startswith("[prune]") or line.startswith("[warn]"):
+                _warn(line[line.find("]") + 1:].strip())
         prune_removed = sum(1 for l in prune_log if l.startswith("[prune]"))
         prune_warned  = sum(1 for l in prune_log if l.startswith("[warn]"))
         if prune_removed or prune_warned:
             _logger._original_print(
-                f"    Pruner: removed {prune_removed} file(s), {prune_warned} warning(s)"
+                f"    Pruner: removed {prune_removed} file(s), {prune_warned} warning(s) — see PORTING_NOTES.txt"
             )
     with _logger.phase("Writing porting notes", total=0, unit="step", colour="yellow"):
         write_porting_notes()
