@@ -74,3 +74,7 @@ ModMorpher does NOT:
 
 
    
+
+
+## Code layout
+See `REFACTOR_NOTES.md` — `modmorpher.py` is a thin entry point; the implementation is split into `mm_*.py` modules and all Java analysis uses javalang.
