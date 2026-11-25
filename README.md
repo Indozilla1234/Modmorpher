@@ -71,5 +71,8 @@ ModMorpher does NOT:
 - support all Forge/Fabric mod features
 - handle complex rendering systems perfectly
 
-## Git Pull Coverage
-- [![Indozilla1234/Modmorpher clones chart](http://api.gitlytics.dev/api/chart/Indozilla1234/Modmorpher/clones.svg?variant=terminal&theme=terminal-green&chart_type=step&style=smooth&fill=area&milestones=true&short_numbers=false&date_format=iso)](https://github.com/Indozilla1234/Modmorpher)
+# Repo Notes
+## Git Pulls
+[![Indozilla1234/Modmorpher clones chart](http://api.gitlytics.dev/api/chart/Indozilla1234/Modmorpher/clones.svg?variant=terminal&theme=terminal-green&chart_type=step&style=smooth&fill=area&milestones=true&short_numbers=false&date_format=iso)](https://github.com/Indozilla1234/Modmorpher)
+## Views
+[![Indozilla1234/Modmorpher views chart](http://api.gitlytics.dev/api/chart/Indozilla1234/Modmorpher/views.svg?variant=glow&theme=gitlytics-dark&chart_type=area&style=smooth&fill=area&milestones=true&short_numbers=false&date_format=iso)](https://github.com/Indozilla1234/Modmorpher)
